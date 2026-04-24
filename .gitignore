@@ -1,0 +1,25 @@
+# ── Dependencies (if you add a build tool later) ──
+node_modules/
+
+# ── Build outputs ─────────────────────────
+dist/
+build/
+
+# ── Environment & secrets ─────────────────
+.env
+.env.local
+*.env
+
+# ── OS files ──────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editor ────────────────────────────────
+.vscode/
+.idea/
+
+# ── Logs ──────────────────────────────────
+*.log
+
+# ── CDN / cache artifacts ─────────────────
+.cache/
