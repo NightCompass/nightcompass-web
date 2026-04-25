@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.74</title>
+<title>NightCompass v0.75</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.74</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.75</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1296,6 +1296,9 @@ async function loadKp(){
   throw new Error('No valid Kp');
 }
 
+// Safe ISO date parser — handles both "2026-04-25T12:00:00" and "2026-04-25 12:00:00"
+function safeDate(s){ return s ? new Date((s+'').replace(' ','T')) : new Date(NaN); }
+
 async function loadFc(){
   // We need rows from -12h to +36h relative to now.
   const nowMs = Date.now();
@@ -1313,7 +1316,7 @@ async function loadFc(){
       if(Array.isArray(d) && d.length){
         histRows = d
           .map(r=>({time:r.time_tag||r.time, kp:parseFloat(r.estimated_kp??r.kp_index??r.kp)||0, observed:true}))
-          .filter(r=>!isNaN(r.kp) && new Date(r.time).getTime() >= needFrom);
+          .filter(r=>!isNaN(r.kp) && safeDate(r.time).getTime() >= needFrom);
       }
     }
   }catch(e){}
@@ -1326,7 +1329,7 @@ async function loadFc(){
       if(Array.isArray(d) && d.length){
         histRows = d
           .map(r=>({time:r.time_tag, kp:parseFloat(r.estimated_kp??r.kp_index??r.kp)||0, observed:true}))
-          .filter(r=>!isNaN(r.kp) && new Date(r.time).getTime() >= needFrom);
+          .filter(r=>!isNaN(r.kp) && safeDate(r.time).getTime() >= needFrom);
       }
     }catch(e){}
   }
@@ -1339,7 +1342,7 @@ async function loadFc(){
         const raw = (typeof d[0][1]==='string'&&isNaN(parseFloat(d[0][1]))) ? d.slice(1) : d;
         histRows = raw
           .map(r=>({time:r[0], kp:parseFloat(r[1])||0, observed:true}))
-          .filter(r=>!isNaN(r.kp) && new Date(r.time).getTime() >= needFrom);
+          .filter(r=>!isNaN(r.kp) && safeDate(r.time).getTime() >= needFrom);
       }
     }catch(e){}
   }
@@ -1353,7 +1356,7 @@ async function loadFc(){
       if(Array.isArray(d) && d.length){
         fcRows = d
           .map(r=>({time:r.time_tag||r.time, kp:parseFloat(r.kp)||0, observed:false}))
-          .filter(r=>!isNaN(r.kp) && new Date(r.time).getTime() <= needTo);
+          .filter(r=>!isNaN(r.kp) && !isNaN(safeDate(r.time).getTime()));
       }
     }
   }catch(e){}
@@ -1365,7 +1368,7 @@ async function loadFc(){
       if(Array.isArray(d) && d.length){
         fcRows = d
           .map(r=>({time:r.time_tag, kp:parseFloat(r.estimated_kp??r.kp_index??r.kp)||0, observed:false}))
-          .filter(r=>!isNaN(r.kp) && new Date(r.time).getTime() <= needTo);
+          .filter(r=>!isNaN(r.kp) && !isNaN(safeDate(r.time).getTime()));
       }
     }catch(e){}
   }
@@ -1377,7 +1380,7 @@ async function loadFc(){
       if(Array.isArray(d) && d.length){
         fcRows = d
           .map(r=>({time:r.time_tag||r[0], kp:parseFloat(r.kp??r[1])||0, observed:false}))
-          .filter(r=>!isNaN(r.kp) && new Date(r.time).getTime() <= needTo);
+          .filter(r=>!isNaN(r.kp) && !isNaN(safeDate(r.time).getTime()));
       }
     }catch(e){}
   }
@@ -1386,7 +1389,7 @@ async function loadFc(){
   // Deduplicate by time string
   const seen = new Set();
   const merged = [...histRows, ...fcRows]
-    .sort((a,b)=>new Date(a.time)-new Date(b.time))
+    .sort((a,b)=>safeDate(a.time)-safeDate(b.time))
     .filter(r=>{ if(seen.has(r.time)) return false; seen.add(r.time); return true; });
 
   if(merged.length) return merged;
@@ -1796,7 +1799,7 @@ async function toggleCloudLayer(show){
 // Light UI theme → liberty (detailed dark map — high contrast against light panels)
 const OFM_STYLES = {
   dark:  'https://tiles.openfreemap.org/styles/positron',
-  light: 'https://tiles.openfreemap.org/styles/liberty',
+  light: 'https://tiles.openfreemap.org/styles/positron',
 };
 let baseTileLayer = null; // holds the L.maplibreGL instance
 
@@ -2557,10 +2560,8 @@ function renderKp(data){
     document.getElementById('lastUpd').textContent = i18n('noaa-unreachable');
     document.getElementById('lastUpd').style.color = '#f97316';
   } else {
-    // Normalise time string — replace space separator with T for cross-browser ISO 8601
-    const rawTime = (data.time||'').replace(' ','T');
-    const dateObj = rawTime ? new Date(rawTime) : null;
-    const ts = (dateObj && !isNaN(dateObj)) ? dateObj.toLocaleTimeString(currentLang,{hour:'2-digit',minute:'2-digit'}) : '—';
+    const dateObj = safeDate(data.time);
+    const ts = !isNaN(dateObj) ? dateObj.toLocaleTimeString(currentLang,{hour:'2-digit',minute:'2-digit'}) : '—';
     const obs = data.observed ? 'observed' : 'estimated';
     document.getElementById('lastUpd').textContent = `${ts} UTC · ${obs}`;
     document.getElementById('lastUpd').style.color = '';
@@ -3405,7 +3406,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.74';
+  document.title = ORIG_TITLE || 'NightCompass v0.75';
   kpAlertActive = false;
 }
 
@@ -4653,7 +4654,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.74</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.75</div>
   </div>
 </div>
 </body>
