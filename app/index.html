@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.69</title>
+<title>NightCompass v0.70</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.69</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.70</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1230,26 +1230,22 @@ function resetStaleTimer(){
 }
 
 // ── NOAA FETCH ────────────────────────────────────────────────────────────────
-async function noaaFetch(path, timeout=7000){
+// Proxy policy: NOAA JSON endpoints send proper CORS headers — direct fetch
+// works for most users. corsproxy.io is the single trusted fallback.
+// allorigins.win and thingproxy removed — flagged by antivirus vendors.
+async function noaaFetch(path, timeout=8000){
   const url='https://services.swpc.noaa.gov'+path;
-  // 1. Try direct — NOAA sends CORS headers on JSON endpoints
+  // 1. Direct — NOAA supports CORS on all JSON endpoints
   try{
-    const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(4000)});
-    if(r.ok){ const d=await r.json(); if(d&&d.length) return d; }
+    const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(5000)});
+    if(r.ok){ const d=await r.json(); if(d&&(Array.isArray(d)?d.length:true)) return d; }
   }catch(e){}
-  // 2. Proxy fallbacks
-  for(const proxy of [
-    `https://corsproxy.io/?${encodeURIComponent(url)}`,
-    `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-    `https://thingproxy.freeboard.io/fetch/${url}`,
-  ]){
-    try{
-      const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
-      if(!r.ok)continue;
-      const d=await r.json();
-      if(d)return d;
-    }catch(e){}
-  }
+  // 2. Single trusted CORS proxy fallback — no third-party data brokers
+  try{
+    const proxy=`https://corsproxy.io/?${encodeURIComponent(url)}`;
+    const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
+    if(r.ok){ const d=await r.json(); if(d) return d; }
+  }catch(e){}
   throw new Error('NOAA unavailable');
 }
 
@@ -1347,7 +1343,22 @@ async function loadAlerts(){ return await noaaFetch('/products/alerts.json'); }
 async function loadWeather(lat, lon){
   const key=`${lat.toFixed(2)},${lon.toFixed(2)}`;
   if(wxCache[key]&&Date.now()-wxCache[key].ts<30*60*1000) return wxCache[key].data;
-  const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=temperature_2m,weathercode,cloudcover,windspeed_10m&daily=weathercode,temperature_2m_max,temperature_2m_min,cloudcover_mean,windspeed_10m_max&timezone=auto&timeformat=unixtime&forecast_days=7`;
+  // Open-Meteo v1 — expanded variable set for accuracy parity with consumer weather apps.
+  // wind_direction_10m + gusts, apparent temp, humidity, pressure, precipitation
+  // probability added. weather_code replaces deprecated weathercode.
+  const omHourly = [
+    'temperature_2m','apparent_temperature','weather_code',
+    'cloudcover','windspeed_10m','winddirection_10m','windgusts_10m',
+    'relative_humidity_2m','precipitation_probability','precipitation',
+    'surface_pressure','visibility',
+  ].join(',');
+  const omDaily = [
+    'weather_code','temperature_2m_max','temperature_2m_min',
+    'apparent_temperature_max','apparent_temperature_min',
+    'cloudcover_mean','windspeed_10m_max','windgusts_10m_max',
+    'precipitation_sum','precipitation_probability_max','sunrise','sunset',
+  ].join(',');
+  const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${omHourly}&daily=${omDaily}&timezone=auto&timeformat=unixtime&forecast_days=7`;
   const r=await fetch(url,{signal:AbortSignal.timeout(8000)});
   if(!r.ok) throw new Error('Open-Meteo failed');
   const d=await r.json();
@@ -2792,7 +2803,7 @@ function renderForecastData(d, fcRows){
     const lbl=h===0?'12am':h<12?`${h}am`:h===12?'12pm':`${h-12}pm`;
     const temp=d.hourly.temperature_2m?.[hi];
     const cloud=d.hourly.cloudcover?.[hi]??0;
-    const code=d.hourly.weathercode?.[hi]??0;
+    const code=d.hourly.weather_code?.[hi]??d.hourly.weathercode?.[hi]??0; // weather_code preferred, weathercode fallback for cache
     const wind=d.hourly.windspeed_10m?.[hi];
     return`<div class="wx-card ${i===0?'now':''}">
       <div class="wx-time">${lbl}</div><div class="wx-icon">${wmoIcon(code)}</div>
@@ -2860,7 +2871,7 @@ function renderForecastData(d, fcRows){
     const matching=(fcRows||[]).filter(r=>r.time?.substring(0,10)===omDate(ts).toISOString().substring(0,10));
     const kpVal=matching.length?matching.reduce((s,r)=>s+r.kp,0)/matching.length:currentKp;
     const col=kpHex(kpVal);
-    const code=d.daily.weathercode?.[i]??0;
+    const code=d.daily.weather_code?.[i]??d.daily.weathercode?.[i]??0; // weather_code preferred
     const tmax=d.daily.temperature_2m_max?.[i];
     const tmin=d.daily.temperature_2m_min?.[i];
     const cloud=d.daily.cloudcover_mean?.[i]??0;
@@ -3295,7 +3306,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.69';
+  document.title = ORIG_TITLE || 'NightCompass v0.70';
   kpAlertActive = false;
 }
 
@@ -4527,7 +4538,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.69</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.70</div>
   </div>
 </div>
 </body>
