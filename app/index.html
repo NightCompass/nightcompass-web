@@ -2212,27 +2212,24 @@ const PinLayer = L.Layer.extend({
   _redraw(){
     if(!this._canvas||!this._map) return;
     requestAnimationFrame(()=>{
-    if(!this._canvas||!this._map) return;
-    const map=this._map, size=map.getSize();
-    if(!size.x || !size.y) return;
-    this._canvas.width=size.x; this._canvas.height=size.y;
-    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-    if(this._hitDiv) L.DomUtil.setPosition(this._hitDiv, map.containerPointToLayerPoint([0,0]));
-    const ctx=this._canvas.getContext('2d');
-    ctx.clearRect(0,0,size.x,size.y);
-    if(!layers.pins) return;
-
-    // Full-world width in screen pixels at current zoom
-    const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
-
-    savedLocs.forEach(loc=>{
-      const sc=visScore(this._kp,loc), col=sc>65?'#00ffa3':sc>35?'#facc15':'#f97316';
-      const pt = map.latLngToContainerPoint([loc.lat, loc.lon]);
-      // Step through all world copies visible on screen (and one beyond each edge)
-      for(let wx = pt.x - Math.ceil((pt.x + size.x) / worldPx) * worldPx;
-              wx < size.x + worldPx; wx += worldPx){
-        this._drawPin(ctx, wx, pt.y, col, loc.name===activeLoc?.name);
-      }
+      if(!this._canvas||!this._map) return;
+      const map=this._map, size=map.getSize();
+      if(!size.x || !size.y) return;
+      this._canvas.width=size.x; this._canvas.height=size.y;
+      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      if(this._hitDiv) L.DomUtil.setPosition(this._hitDiv, map.containerPointToLayerPoint([0,0]));
+      const ctx=this._canvas.getContext('2d');
+      ctx.clearRect(0,0,size.x,size.y);
+      if(!layers.pins) return;
+      const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
+      savedLocs.forEach(loc=>{
+        const sc=visScore(this._kp,loc), col=sc>65?'#00ffa3':sc>35?'#facc15':'#f97316';
+        const pt = map.latLngToContainerPoint([loc.lat, loc.lon]);
+        for(let wx = pt.x - Math.ceil((pt.x + size.x) / worldPx) * worldPx;
+                wx < size.x + worldPx; wx += worldPx){
+          this._drawPin(ctx, wx, pt.y, col, loc.name===activeLoc?.name);
+        }
+      });
     });
   },
   _drawPin(ctx, x, y, col, isActive){
@@ -2250,9 +2247,7 @@ const PinLayer = L.Layer.extend({
       ctx.strokeStyle=col+'88'; ctx.lineWidth=1.5; ctx.stroke();
     }
   },
-    });
-  }
-  _onClick_UNUSED(e{
+  _onClick(e){
     if(!this._map||!layers.pins) return;
     const map=this._map, size=map.getSize();
     const rect=this._hitDiv.getBoundingClientRect();
