@@ -22,12 +22,12 @@ jobs:
         run: |
           mkdir -p data
 
-          # ── Current Kp ──
+          # ── Current Kp (1-hour geospace) ──
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/json/geospace/geospace_pred_est_kp_1_hour.json" \
             -o /tmp/kp_raw.json || true
           python3 - << 'PY'
-          import json, os
+          import json
           try:
               with open('/tmp/kp_raw.json') as f:
                   d = json.load(f)
@@ -45,7 +45,7 @@ jobs:
               print(f"kp.json failed: {e}")
           PY
 
-          # ── Kp history — planetary_k_index_1m.json (confirmed working) ──
+          # ── Kp history — planetary_k_index_1m (today's 1-min data) ──
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json" \
             -o /tmp/kp1m_raw.json || true
@@ -54,7 +54,6 @@ jobs:
           try:
               with open('/tmp/kp1m_raw.json') as f:
                   d = json.load(f)
-              # Strip header row if present
               raw = d[1:] if (len(d) > 0 and isinstance(d[0], list) and not isinstance(d[0][1], float)) else d
               out = []
               for r in raw:
@@ -100,12 +99,12 @@ jobs:
             "https://services.swpc.noaa.gov/products/solar-wind/plasma-2-hour.json" \
             -o data/solar_wind_plasma.json || true
 
-          # ── Solar wind mag (IMF) ──
+          # ── Solar wind mag ──
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/products/solar-wind/mag-2-hour.json" \
             -o data/solar_wind_mag.json || true
 
-          # ── Active alerts ──
+          # ── Alerts ──
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/products/alerts.json" \
             -o data/alerts.json || true
