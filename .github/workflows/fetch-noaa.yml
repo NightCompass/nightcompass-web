@@ -87,6 +87,34 @@ jobs:
               print(f"✗ kp_history.json failed: {e}")
           PY
 
+          # ── Kp 1-min latest — most recent single reading ──────────────────
+          # Used as browser fallback when direct NOAA CORS fetch fails.
+          # Extracted from the same planetary_k_index_1m.json used for kp_history.
+          python3 - << 'PY'
+          import json
+          try:
+              with open('/tmp/kp1m_raw.json') as f:
+                  d = json.load(f)
+              raw = d[1:] if (len(d) > 0 and isinstance(d[0], list) and not isinstance(d[0][1], float)) else d
+              # Walk backwards to find a valid reading
+              val, time = None, None
+              for r in reversed(raw):
+                  try:
+                      v = round(float(r[1]), 2)
+                      val, time = v, r[0]
+                      break
+                  except:
+                      pass
+              if val is not None:
+                  with open('data/kp_1m_latest.json', 'w') as f:
+                      json.dump({"kp": val, "time": time, "source": "planetary_k_index_1m"}, f)
+                  print(f"✓ kp_1m_latest.json: Kp {val} at {time}")
+              else:
+                  print("✗ kp_1m_latest.json: no valid row found")
+          except Exception as e:
+              print(f"✗ kp_1m_latest.json failed: {e}")
+          PY
+
           # ── Kp forecast — noaa-planetary-k-index-forecast.json ───────────
           # CORS-blocked in browsers — fetched server-side here.
           # Format: [["time_tag","kp","observed/estimated"],[...], ...]
