@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.75</title>
+<title>NightCompass v0.76</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.75</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.76</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1392,7 +1392,10 @@ async function loadFc(){
     .sort((a,b)=>safeDate(a.time)-safeDate(b.time))
     .filter(r=>{ if(seen.has(r.time)) return false; seen.add(r.time); return true; });
 
+  // Return forecast-only rows if we have them even without history
   if(merged.length) return merged;
+  if(fcRows.length) return fcRows;
+  if(histRows.length) return histRows;
   throw new Error('Forecast unavailable');
 }
 
@@ -1795,10 +1798,10 @@ async function toggleCloudLayer(show){
 // ── BASEMAP — OpenFreeMap (free forever, commercially licensed, OSM data) ────
 // Uses MapLibre GL Leaflet bridge: renders vector tiles natively,
 // street-level zoom, proper dark/light themes, no API key required.
-// Dark UI theme → positron (clean light map — high contrast against dark panels)
-// Light UI theme → liberty (detailed dark map — high contrast against light panels)
+// Dark UI theme → liberty (detailed coloured map — matches v0.73 CEO preference)
+// Light UI theme → positron (clean minimal map)
 const OFM_STYLES = {
-  dark:  'https://tiles.openfreemap.org/styles/positron',
+  dark:  'https://tiles.openfreemap.org/styles/liberty',
   light: 'https://tiles.openfreemap.org/styles/positron',
 };
 let baseTileLayer = null; // holds the L.maplibreGL instance
@@ -3406,7 +3409,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.75';
+  document.title = ORIG_TITLE || 'NightCompass v0.76';
   kpAlertActive = false;
 }
 
@@ -4654,7 +4657,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.75</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.76</div>
   </div>
 </div>
 </body>
