@@ -89,11 +89,14 @@ jobs:
 
           # ── Kp 1-min latest — most recent single reading ──────────────────
           # Used as browser fallback when direct NOAA CORS fetch fails.
-          # Extracted from the same planetary_k_index_1m.json used for kp_history.
+          # Has its own independent curl so it doesn't fail when kp_history is empty.
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json" \
+            -o /tmp/kp1m_latest_raw.json || true
           python3 - << 'PY'
           import json
           try:
-              with open('/tmp/kp1m_raw.json') as f:
+              with open('/tmp/kp1m_latest_raw.json') as f:
                   d = json.load(f)
               raw = d[1:] if (len(d) > 0 and isinstance(d[0], list) and not isinstance(d[0][1], float)) else d
               # Walk backwards to find a valid reading
