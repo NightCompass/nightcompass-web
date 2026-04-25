@@ -73,11 +73,21 @@ jobs:
           try:
               with open('/tmp/kp1m_raw.json') as f:
                   d = json.load(f)
-              raw = d[1:] if (len(d) > 0 and isinstance(d[0], list) and not isinstance(d[0][1], float)) else d
               out = []
-              for r in raw:
+              for r in d:
                   try:
-                      out.append({"time_tag": r[0], "kp": round(float(r[1]), 2)})
+                      if isinstance(r, dict):
+                          # Current NOAA format: object with named keys
+                          t = r.get('time_tag', '')
+                          v = round(float(r.get('estimated_kp', r.get('kp_index', 0))), 2)
+                      elif isinstance(r, list):
+                          # Legacy array format: [time, kp, ...]
+                          t = r[0]
+                          v = round(float(r[1]), 2)
+                      else:
+                          continue
+                      if t and v >= 0:
+                          out.append({"time_tag": t, "kp": v})
                   except:
                       pass
               with open('data/kp_history.json', 'w') as f:
@@ -98,14 +108,20 @@ jobs:
           try:
               with open('/tmp/kp1m_latest_raw.json') as f:
                   d = json.load(f)
-              raw = d[1:] if (len(d) > 0 and isinstance(d[0], list) and not isinstance(d[0][1], float)) else d
-              # Walk backwards to find a valid reading
               val, time = None, None
-              for r in reversed(raw):
+              for r in reversed(d):
                   try:
-                      v = round(float(r[1]), 2)
-                      val, time = v, r[0]
-                      break
+                      if isinstance(r, dict):
+                          v = round(float(r.get('estimated_kp', r.get('kp_index', -1))), 2)
+                          t = r.get('time_tag', '')
+                      elif isinstance(r, list):
+                          v = round(float(r[1]), 2)
+                          t = r[0]
+                      else:
+                          continue
+                      if t and v >= 0:
+                          val, time = v, t
+                          break
                   except:
                       pass
               if val is not None:
