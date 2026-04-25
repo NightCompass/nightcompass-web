@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.78</title>
+<title>NightCompass v0.79</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.78</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.79</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1226,7 +1226,7 @@ function resetStaleTimer(){
   clearTimeout(staleTimer);
   document.getElementById('rfBtn').classList.remove('stale');
   document.getElementById('rfLbl').textContent='REFRESH';
-  staleTimer=setTimeout(()=>{ document.getElementById('rfBtn').classList.add('stale'); document.getElementById('rfLbl').textContent='NEW DATA'; },5*60*1000);
+  staleTimer=setTimeout(()=>{ document.getElementById('rfBtn').classList.add('stale'); document.getElementById('rfLbl').textContent='NEW DATA'; },10*60*1000);
 }
 
 // ── NOAA FETCH ────────────────────────────────────────────────────────────────
@@ -3022,7 +3022,9 @@ function switchTab(name,btn){
   document.getElementById('lbar').style.display=name==='map'?'flex':'none';
   // Activity mode: CSS hides both panels and expands mcon to full width
   document.querySelector('.app').classList.toggle('activity-mode', name==='activity');
-  // Reset flag when leaving Activity so re-opening fetches fresh data
+  // Always reset activityLoaded when switching TO activity so it gets fresh data
+  if(name==='activity') activityLoaded = false;
+  // Also reset when leaving, so next visit is always fresh
   if(name!=='activity') activityLoaded = false;
   if(name==='weather') loadAndRenderWeather(activeLoc);
   // Double rAF: first frame shows the tab, second frame has resolved layout for canvas sizing
@@ -3432,7 +3434,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.78';
+  document.title = ORIG_TITLE || 'NightCompass v0.79';
   kpAlertActive = false;
 }
 
@@ -3583,6 +3585,37 @@ async function init(){
   setTimeout(()=>{ try{loadAndRenderConds(activeLoc,kp);}catch(e){} }, 900);
   setTimeout(()=>{ try{loadWeather(activeLoc.lat,activeLoc.lon);}catch(e){} }, 1500);
   setInterval(()=>{ try{drawAuroraLayer(currentKp);}catch(e){} }, 5*60*1000);
+
+  // ── BACKGROUND AUTO-REFRESH — every 10 minutes ────────────────────────────
+  // Mirrors the GitHub Actions cache interval. Silently updates all globals,
+  // then re-renders whichever tab is currently visible. No user action needed.
+  setInterval(async ()=>{
+    try{
+      const [kpR,fcR,swR,imfR,alR] = await Promise.allSettled([
+        loadKp(), loadFc(), loadSW(), loadIMF(), loadAlerts()
+      ]);
+      // Update globals
+      const kpData = kpR.status==='fulfilled' ? kpR.value : null;
+      if(kpData){ currentKp=kpData.kp; lastKpData=kpData; renderKp(kpData); }
+      if(fcR.status==='fulfilled' && fcR.value?.length){
+        cachedFc=fcR.value; renderFcBars(fcR.value);
+      }
+      if(swR.status==='fulfilled' && imfR.status==='fulfilled') renderSW(swR.value, imfR.value);
+      if(alR.status==='fulfilled'){ cachedAlerts=alR.value; renderAlerts(alR.value); }
+      renderLocList(currentKp); renderPinsAndGrid(currentKp);
+      if(auroraLg && layers.aurora){ ncMap.removeLayer(auroraLg); auroraLg=null; drawAuroraLayer(currentKp); }
+      loadAndRenderConds(activeLoc, currentKp);
+      // Re-render the active tab with fresh data
+      const activeTab = document.querySelector('.tc.at')?.id;
+      if(activeTab==='tab-weather'){
+        loadAndRenderWeather(activeLoc);
+      } else if(activeTab==='tab-activity'){
+        activityLoaded = false; // allow re-render
+        requestAnimationFrame(()=>requestAnimationFrame(()=>loadAndRenderActivity()));
+      }
+      resetStaleTimer();
+    }catch(e){ /* silent — background refresh, don't disturb the user */ }
+  }, 10 * 60 * 1000); // 10 minutes
   } finally {
     // Always resolve — even if NOAA is down or init errors early
     // Activity tab can then render with whatever data is available
@@ -4684,7 +4717,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.78</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.79</div>
   </div>
 </div>
 </body>
