@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="frame-ancestors 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.83</title>
+<title>NightCompass v0.84</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — SRI hashes from official leafletjs.com/download.html -->
@@ -15,19 +15,16 @@
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
   crossorigin="anonymous"></script>
 
-<!-- MapLibre GL 2.4.0 — jsdelivr · SRI hashes verified via srihash.org -->
-<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@2.4.0/dist/maplibre-gl.css"
+<!-- MapLibre GL 2.4.0 — self-hosted in /vendor/ · SRI verified via srihash.org -->
+<link href="/vendor/maplibre-gl.css"
   rel="stylesheet"
-  integrity="sha256-XSFr7LOcuEhLTCjxEDKGYWrybnxvmEbq1vVebzaOdGQ="
-  crossorigin="anonymous"/>
-<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@2.4.0/dist/maplibre-gl.js"
-  integrity="sha256-+w4eOjx0PG0PkY759djLZBB4sF2VoKuyJfsQ67pUGYk="
-  crossorigin="anonymous"></script>
+  integrity="sha256-XSFr7LOcuEhLTCjxEDKGYWrybnxvmEbq1vVebzaOdGQ="/>
+<script src="/vendor/maplibre-gl.js"
+  integrity="sha256-+w4eOjx0PG0PkY759djLZBB4sF2VoKuyJfsQ67pUGYk="></script>
 
-<!-- MapLibre GL Leaflet bridge 0.0.20 -->
-<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.20/leaflet-maplibre-gl.js"
-  integrity="sha256-/LD//86ABfi3cF7izoYCBVoAzxJXxqlUHKk57MVWjsY="
-  crossorigin="anonymous"></script>
+<!-- MapLibre GL Leaflet bridge 0.0.20 — self-hosted in /vendor/ -->
+<script src="/vendor/leaflet-maplibre-gl.js"
+  integrity="sha256-/LD//86ABfi3cF7izoYCBVoAzxJXxqlUHKk57MVWjsY="></script>
 <style>
 /* ═══ THEME SYSTEM — two axis: base + a11y ═══ */
 :root {
@@ -574,7 +571,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.83</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.84</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -3531,7 +3528,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.83';
+  document.title = ORIG_TITLE || 'NightCompass v0.84';
   kpAlertActive = false;
 }
 
@@ -4814,7 +4811,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.83</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.84</div>
   </div>
 </div>
 </body>
