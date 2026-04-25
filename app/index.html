@@ -2,9 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="frame-ancestors 'none';">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.86</title>
+<title>NightCompass v0.87</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.86</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.87</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1353,20 +1353,7 @@ async function loadFc(){
     }
   }catch(e){}
 
-  // Priority 2: /json/geospace/geospace_pred_est_kp_7_day.json (confirmed open CORS)
-  // Format: [{"time_tag":"...","estimated_kp":1.67,"kp":"2M",...}, ...]
-  if(!histRows.length){
-    try{
-      const d = await noaaFetch('/json/geospace/geospace_pred_est_kp_7_day.json');
-      if(Array.isArray(d) && d.length){
-        histRows = d
-          .map(r=>({time:r.time_tag, kp:parseFloat(r.estimated_kp??r.kp_index??r.kp)||0, observed:true}))
-          .filter(r=>!isNaN(r.kp) && safeDate(r.time).getTime() >= needFrom);
-      }
-    }catch(e){}
-  }
-
-  // Priority 3: planetary_k_index_1m
+  // Priority 2: planetary_k_index_1m (geospace_pred_est_kp_7_day.json removed — endpoint is 404)
   if(!histRows.length){
     try{
       const d = await noaaFetch('/json/planetary_k_index_1m.json');
@@ -2389,7 +2376,7 @@ function addLpLayer(){
     createTile(coords, done){
       const tile = document.createElement('canvas');
       tile.width = tile.height = 256;
-      const ctx  = tile.getContext('2d');
+      const ctx  = tile.getContext('2d', {willReadFrequently:true});
       const img  = new Image();
       img.crossOrigin = 'anonymous';
       img.onload = () => {
@@ -3524,7 +3511,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.86';
+  document.title = ORIG_TITLE || 'NightCompass v0.87';
   kpAlertActive = false;
 }
 
@@ -4217,7 +4204,7 @@ function saveCanvasSnapshot(canvasId){
   const canvas = document.getElementById(canvasId);
   if(!canvas) return;
   try{
-    canvas._baseImage = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    canvas._baseImage = canvas.getContext('2d', {willReadFrequently:true}).getImageData(0, 0, canvas.width, canvas.height);
   }catch(e){}
 }
 
@@ -4809,7 +4796,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.86</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.87</div>
   </div>
 </div>
 </body>
