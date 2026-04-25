@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.76</title>
+<title>NightCompass v0.77</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -522,7 +522,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
         </a>
       </div>
       <div style="margin-top:8px;font-size:9px;opacity:.6;" id="sd-credits-data">
-        Data: NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer
+        Data: NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer · NASA GIBS
       </div>
     </div>
   </div>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.76</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.77</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1234,10 +1234,12 @@ function resetStaleTimer(){
 //   1. Direct fetch — works when NOAA sends CORS headers (most /json/ endpoints)
 //   2. corsproxy.io  — transparent open-source proxy, no registration required
 //   3. cors.sh       — simple maintained proxy, different infrastructure = diversity
+//   4. api.codetabs.com — reliable public CORS proxy, no AV flags
 // Removed: allorigins.win (AV-flagged), thingproxy (unreliable)
 async function noaaFetch(path, timeout=8000){
   const url='https://services.swpc.noaa.gov'+path;
   // 1. Direct — NOAA /json/ endpoints send Access-Control-Allow-Origin: *
+  //    /products/ endpoints are CORS-blocked but worth trying (policy changes occasionally)
   try{
     const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(10000)});
     if(r.ok){ const d=await r.json(); if(d&&(Array.isArray(d)?d.length:true)) return d; }
@@ -1248,7 +1250,13 @@ async function noaaFetch(path, timeout=8000){
     const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
     if(r.ok){ const d=await r.json(); if(d) return d; }
   }catch(e){}
-  // 3. cors.sh — independent infrastructure, clean AV record
+  // 3. api.codetabs.com — reliable public proxy, independent infrastructure
+  try{
+    const proxy=`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
+    const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
+    if(r.ok){ const d=await r.json(); if(d) return d; }
+  }catch(e){}
+  // 4. cors.sh — independent infrastructure, clean AV record
   try{
     const proxy=`https://cors.sh/${url}`;
     const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout),
@@ -1773,8 +1781,18 @@ async function toggleCloudLayer(show){
         showToast('🌤 Live cloud satellite loaded');
         return;
       }
-    }catch(e){ console.warn('RainViewer:', e); }
-    showToast('⚠ Cloud satellite unavailable — RainViewer free tier','#f97316');
+    }catch(e){ console.warn('RainViewer failed, falling back to NASA GIBS:', e); }
+    // ── Fallback: NASA GIBS MODIS Terra true-color (~3h delay, free, no key) ──
+    try{
+      const today = new Date().toISOString().slice(0,10);
+      const gibsUrl = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${today}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
+      cloudLayer = L.tileLayer(gibsUrl,
+        {opacity:0.6, zIndex:300, attribution:'NASA GIBS · MODIS Terra', maxZoom:9}
+      ).addTo(ncMap);
+      showToast('🛰 Cloud layer — NASA MODIS Terra (~3h delay)');
+      return;
+    }catch(e2){ console.warn('NASA GIBS also failed:', e2); }
+    showToast('⚠ Cloud satellite unavailable','#f97316');
     document.getElementById('btnClouds').classList.remove('on');
     layers.clouds = false;
 
@@ -3095,7 +3113,7 @@ const UI_STRINGS = {
     // Credits
     'sd-credits-title':'Credits',
     'sd-credits-by':'Designed & built by <span style="color:var(--green)">Romain Aubry</span>',
-    'sd-credits-data':'Data: NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer',
+    'sd-credits-data':'Data: NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer · NASA GIBS',
     'kp-quiet':'0 Quiet','kp-storm':'5 Storm','kp-extreme':'9 Extreme',
     'kp-data-unavail':'⚠ Data unavailable','fc-retry':'↻ Retrying...','noaa-unreachable':'⚠ NOAA UNREACHABLE','fc-unavail':'⚠ Forecast unavailable','wx-unavail':'Weather data unavailable',
     'bz-strong-s':'✓ Strongly southward','bz-south':'✓ Southward (favorable)',
@@ -3188,7 +3206,7 @@ const UI_STRINGS = {
     'cond-vis':'Vis','cond-wind':'Vent','cond-temp':'Temp','cond-skies':'Ciel',
     'sd-credits-title':'Crédits',
     'sd-credits-by':'Conçu & développé par <span style="color:var(--green)">Romain Aubry</span>',
-    'sd-credits-data':'Données : NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer',
+    'sd-credits-data':'Données : NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer · NASA GIBS',
   },
   es:{
     'nav-map':'MAPA','nav-weather':'CLIMA','nav-activity':'ACTIVIDAD','rfLbl':'ACTUALIZAR',
@@ -3271,7 +3289,7 @@ const UI_STRINGS = {
     'cond-vis':'Vis','cond-wind':'Viento','cond-temp':'Temp','cond-skies':'Cielo',
     'sd-credits-title':'Créditos',
     'sd-credits-by':'Diseñado & desarrollado por <span style="color:var(--green)">Romain Aubry</span>',
-    'sd-credits-data':'Datos: NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer',
+    'sd-credits-data':'Datos: NOAA SWPC · Open-Meteo · OpenStreetMap · RainViewer · NASA GIBS',
   },
 };
 
@@ -3409,7 +3427,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.76';
+  document.title = ORIG_TITLE || 'NightCompass v0.77';
   kpAlertActive = false;
 }
 
@@ -3646,16 +3664,19 @@ let activityLoaded = false;
 async function loadAndRenderActivity(){
   if(activityLoaded) return;
   activityLoaded = true;
-  applyTranslations();
 
   try{
     // Wait for init() to finish — guarantees lastKpData, cachedFc, currentKp are populated
     await initReady;
 
+    // Apply translations AFTER initReady so dynamic content written below won't be overwritten
+    applyTranslations();
+
     const now = Date.now();
 
     // ── STORM LEVEL — read from globals set by init() ─────────────────────────
-    const kpVal = lastKpData?.kp ?? currentKp ?? 0;
+    // Use nullish coalescing carefully: kp=0 is valid, must not fall through to currentKp
+    const kpVal = (lastKpData?.kp != null) ? lastKpData.kp : (currentKp != null ? currentKp : 0);
     const {g, label, col: kpCol} = gLevel(kpVal);
     const badge = document.getElementById('actStormBadge');
     if(badge){ badge.textContent=g; badge.style.background=kpCol+'22'; badge.style.color=kpCol; }
@@ -4575,7 +4596,7 @@ function refreshDiag(){
     const proton   = document.getElementById('actProton');
 
     const badgeOk   = badgeEl?.textContent && badgeEl.textContent !== 'G0' || badgeEl?.textContent === 'G0';
-    const kpLblOk   = kpLabel?.textContent && !kpLabel.textContent.includes('—');
+    const kpLblOk   = kpLabel?.textContent && kpLabel.textContent !== 'Kp —' && kpLabel.textContent !== '—';
     const geoOk     = geoEl?.children.length > 0;
     const chartW    = canvas ? Math.round(canvas.getBoundingClientRect().width) : 0;
     const chartH    = canvas ? canvas.height : 0;
@@ -4615,7 +4636,8 @@ function refreshDiag(){
       diagItem('NOAA status', noaaOk ? lastUpd.substring(0,25) : 'UNREACHABLE', noaaOk?'ok':'err') +
       diagItem('Kp forecast bars', fcOk2 ? 'rendered' : 'failed/retrying', fcOk2?'ok':'warn') +
       diagItem('Active alerts', alertPill, alertPill.includes('0')?'idle':'ok') +
-      diagItem('CORS proxy', 'via noaaFetch chain', 'idle');
+      diagItem('CORS proxy chain', '→ codetabs → cors.sh', 'idle') +
+      diagItem('NC_DATA cache', cachedFc?.length ? `${cachedFc.length} rows` : 'miss — check /data/', cachedFc?.length?'ok':'err');
   }
 
   // ── SUMMARY dot in toggle bar ──────────────────────────────────────────────
@@ -4657,7 +4679,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.76</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.77</div>
   </div>
 </div>
 </body>
