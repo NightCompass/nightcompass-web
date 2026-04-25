@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.79</title>
+<title>NightCompass v0.80</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.79</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.80</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1554,33 +1554,48 @@ const AuroraLayer = L.Layer.extend({
   onAdd(map){
     this._map=map;
     this._canvas=document.createElement('canvas');
-    this._canvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;';
+    this._canvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;will-change:transform;';
     map.getPanes().overlayPane.appendChild(this._canvas);
+    this._rafId = null;
+    // move: shift canvas via cheap CSS translate so it tracks instantly during drag
+    this._onMove = ()=>{
+      if(!this._canvas||!this._map) return;
+      const tl=this._map.containerPointToLayerPoint([0,0]);
+      L.DomUtil.setPosition(this._canvas, tl);
+    };
+    map.on('move', this._onMove, this);
     map.on('moveend zoomend resize', this._redraw, this);
     this._redraw();
     setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.85'; },80);
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
+    map.off('move', this._onMove, this);
     map.off('moveend zoomend resize', this._redraw, this);
+    if(this._rafId) cancelAnimationFrame(this._rafId);
   },
   setKp(kp){ this._kp=kp; this._ovation=null; this._redraw(); },
   setOvation(data){ this._ovation=data; this._redraw(); },
   _redraw(){
     if(!this._canvas||!this._map) return;
-    const map=this._map, size=map.getSize();
-    if(!size.x || !size.y) return;
-    this._canvas.width=size.x; this._canvas.height=size.y;
-    const topLeft=map.containerPointToLayerPoint([0,0]);
-    L.DomUtil.setPosition(this._canvas, topLeft);
-    const ctx=this._canvas.getContext('2d');
-    ctx.clearRect(0,0,size.x,size.y);
-    if(this._ovation) this._drawOvation(ctx,map,size);
-    else this._drawModelled(ctx,map,size);
+    if(this._rafId) cancelAnimationFrame(this._rafId);
+    this._rafId = requestAnimationFrame(()=>{
+      if(!this._canvas||!this._map) return;
+      const map=this._map, size=map.getSize();
+      if(!size.x || !size.y) return;
+      this._canvas.width=size.x; this._canvas.height=size.y;
+      const topLeft=map.containerPointToLayerPoint([0,0]);
+      L.DomUtil.setPosition(this._canvas, topLeft);
+      const ctx=this._canvas.getContext('2d');
+      ctx.clearRect(0,0,size.x,size.y);
+      if(this._ovation) this._drawOvation(ctx,map,size);
+      else this._drawModelled(ctx,map,size);
+    });
   },
   _drawModelled(ctx, map, size){
     const kp=this._kp, bands=getAuroraPalette();
-    const step=Math.max(2, Math.round(6/map.getZoom()));
+    // Adaptive step: coarser at low zoom (fast), finer when zoomed in (detail)
+    const step=Math.max(2, Math.round(8/map.getZoom()));
     for(let px=0;px<size.x;px+=step){
       for(let py=0;py<size.y;py+=step){
         const ll=map.containerPointToLatLng([px+step/2,py+step/2]);
@@ -1692,14 +1707,20 @@ const CloudCanvasLayer = L.Layer.extend({
   onAdd(map){
     this._map = map;
     this._canvas = document.createElement('canvas');
-    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .6s;';
+    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .6s;will-change:transform;';
     map.getPanes().overlayPane.appendChild(this._canvas);
+    this._onMove = ()=>{
+      if(!this._canvas||!this._map) return;
+      L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0,0]));
+    };
+    map.on('move', this._onMove, this);
     map.on('moveend zoomend resize', this._redraw, this);
     this._redraw();
     setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.66'; }, 60);
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
+    map.off('move', this._onMove, this);
     map.off('moveend zoomend resize', this._redraw, this);
   },
   _redraw(){
@@ -1917,32 +1938,43 @@ const DayNightLayer = L.Layer.extend({
   onAdd(map){
     this._map = map;
     this._canvas = document.createElement('canvas');
-    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;will-change:transform;';
     map.getPanes().overlayPane.appendChild(this._canvas);
+    this._rafId = null;
+    this._onMove = ()=>{
+      if(!this._canvas||!this._map) return;
+      L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0,0]));
+    };
+    map.on('move', this._onMove, this);
     map.on('moveend zoomend resize', this._redraw, this);
     this._redraw();
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
+    map.off('move', this._onMove, this);
     map.off('moveend zoomend resize', this._redraw, this);
+    if(this._rafId) cancelAnimationFrame(this._rafId);
   },
   setDate(date){ this._date = date; this._redraw(); },
   _redraw(){
     if(!this._canvas || !this._map) return;
-    const map  = this._map;
-    const size = map.getSize();
-    if(!size.x || !size.y) return; // map not laid out yet — skip
-    this._canvas.width  = size.x;
-    this._canvas.height = size.y;
-    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+    if(this._rafId) cancelAnimationFrame(this._rafId);
+    this._rafId = requestAnimationFrame(()=>{
+      if(!this._canvas || !this._map) return;
+      const map  = this._map;
+      const size = map.getSize();
+      if(!size.x || !size.y) return;
+      this._canvas.width  = size.x;
+      this._canvas.height = size.y;
+      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
 
     const ctx = this._canvas.getContext('2d');
     ctx.clearRect(0, 0, size.x, size.y);
 
     const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
 
-    // Sample every 3px — fast enough, smooth enough at all zoom levels
-    const step = 3;
+    // Adaptive step: coarser at low zoom (very fast global render), finer when zoomed in
+    const step = Math.max(2, Math.round(7 / map.getZoom()));
     const imgData = ctx.createImageData(size.x, size.y);
 
     for(let px = 0; px < size.x; px += step){
@@ -1986,6 +2018,7 @@ const DayNightLayer = L.Layer.extend({
       }
     }
     ctx.putImageData(imgData, 0, 0);
+    });
   }
 });
 
@@ -2089,6 +2122,13 @@ const PinLayer = L.Layer.extend({
     this._hitDiv.style.cssText = 'position:absolute;inset:0;z-index:400;cursor:pointer;';
     map.getPanes().overlayPane.appendChild(this._hitDiv);
     this._hitDiv.addEventListener('click', e => this._onClick(e));
+    this._onMove = ()=>{
+      if(!this._canvas||!this._map) return;
+      const tl = this._map.containerPointToLayerPoint([0,0]);
+      L.DomUtil.setPosition(this._canvas, tl);
+      if(this._hitDiv) L.DomUtil.setPosition(this._hitDiv, tl);
+    };
+    map.on('move', this._onMove, this);
     map.on('moveend zoomend resize', this._redraw, this);
     this._addPopupMarkers();
     this._redraw();
@@ -2098,6 +2138,7 @@ const PinLayer = L.Layer.extend({
     if(this._hitDiv){ map.getPanes().overlayPane.removeChild(this._hitDiv); this._hitDiv=null; }
     this._popupMarkers.forEach(m=>map.removeLayer(m));
     this._popupMarkers = [];
+    map.off('move', this._onMove, this);
     map.off('moveend zoomend resize', this._redraw, this);
   },
   setKp(kp){ this._kp=kp; this._removePopupMarkers(); this._addPopupMarkers(); this._redraw(); },
@@ -2205,7 +2246,7 @@ function renderPinsAndGrid(kp){
     const lineCol  = isLight ? 'rgba(0,0,0,.15)'  : 'rgba(255,255,255,.1)';
     const eqCol    = isLight ? 'rgba(0,0,0,.25)'  : 'rgba(255,255,255,.18)';
 
-    const latLines=[-80,-75,-70,-65,-60,-55,55,60,65,70,75,80];
+    const latLines=[-80,-75,-70,-65,-60,-55,-50,-45,-40,40,45,50,55,60,65,70,75,80];
     latLines.forEach(la=>{
       L.polyline([[la,-540],[la,540]],{color:lineCol,weight:1,dashArray:'4,8'}).addTo(gridLg);
     });
@@ -2243,7 +2284,7 @@ function updateLatLabels(){
   const size   = ncMap.getSize();
   const margin = 6; // px from edge
 
-  const allLats = [-80,-75,-70,-65,-60,-55,0,55,60,65,70,75,80];
+  const allLats = [-80,-75,-70,-65,-60,-55,-50,-45,-40,0,40,45,50,55,60,65,70,75,80];
   allLats.forEach(la=>{
     // Get the screen Y for this latitude
     const pt = ncMap.latLngToContainerPoint([la, 0]);
@@ -3434,7 +3475,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.79';
+  document.title = ORIG_TITLE || 'NightCompass v0.80';
   kpAlertActive = false;
 }
 
@@ -4717,7 +4758,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.79</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.80</div>
   </div>
 </div>
 </body>
