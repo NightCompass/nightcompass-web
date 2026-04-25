@@ -4,13 +4,31 @@
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="frame-ancestors 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.82</title>
+<title>NightCompass v0.83</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<link href="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.css" rel="stylesheet"/>
-<script src="https://unpkg.com/maplibre-gl@2.4.0/dist/maplibre-gl.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.20/leaflet-maplibre-gl.js"></script>
+
+<!-- Leaflet 1.9.4 — SRI hashes from official leafletjs.com/download.html -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+  integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+  crossorigin="anonymous"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+  crossorigin="anonymous"></script>
+
+<!-- MapLibre GL 2.4.0 — moved from unpkg (no SRI) to jsdelivr
+     TODO: add integrity hashes once verified via https://www.srihash.org
+     URLs to hash:
+       https://cdn.jsdelivr.net/npm/maplibre-gl@2.4.0/dist/maplibre-gl.css
+       https://cdn.jsdelivr.net/npm/maplibre-gl@2.4.0/dist/maplibre-gl.js
+       https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.20/leaflet-maplibre-gl.js -->
+<link href="https://cdn.jsdelivr.net/npm/maplibre-gl@2.4.0/dist/maplibre-gl.css"
+  rel="stylesheet" crossorigin="anonymous"/>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@2.4.0/dist/maplibre-gl.js"
+  crossorigin="anonymous"></script>
+
+<!-- MapLibre GL Leaflet bridge 0.0.20 -->
+<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.0.20/leaflet-maplibre-gl.js"
+  crossorigin="anonymous"></script>
 <style>
 /* ═══ THEME SYSTEM — two axis: base + a11y ═══ */
 :root {
@@ -557,7 +575,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.82</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.83</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1080,6 +1098,14 @@ const AURORA_SPOTS = [
 ];
 
 // ── STATE ─────────────────────────────────────────────────────────────────────
+// ── HTML ESCAPE HELPER — used for all external data injected into innerHTML ──
+// Prevents XSS from Nominatim, savedLocs names, or any other external string.
+function esc(s){
+  return String(s==null?'':s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 let savedLocs = [];
 try { savedLocs = JSON.parse(localStorage.getItem('nc_locs_v10')||'[]'); } catch(e){}
 if (!savedLocs.length) savedLocs = DEFAULT_LOCS.map(l=>({...l}));
@@ -2111,7 +2137,7 @@ async function detectUserLocation(){
         className:'',
         html:`<div style="width:14px;height:14px;background:#00d4ff;border:2px solid white;border-radius:50%;box-shadow:0 0 0 4px rgba(0,212,255,.3);animation:ldotPulse 2s infinite;"></div>`,
         iconSize:[14,14],iconAnchor:[7,7]
-      })}).bindPopup(`<div class="pname">${name}</div><div class="prow"><span class="pk">Accuracy</span><span class="pv">±${Math.round(pos.coords.accuracy)}m</span></div>`,{closeButton:false})
+      })}).bindPopup(`<div class="pname">${esc(name)}</div><div class="prow"><span class="pk">Accuracy</span><span class="pv">±${Math.round(pos.coords.accuracy)}m</span></div>`,{closeButton:false})
         .addTo(ncMap);
 
       showToast(`📍 Location detected: ${name}`);
@@ -2160,18 +2186,22 @@ const PinLayer = L.Layer.extend({
     savedLocs.forEach(loc=>{
       const sc=visScore(this._kp,loc), col=sc>65?'#00ffa3':sc>35?'#facc15':'#f97316';
       const sn=loc.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-      const popup=`<div class="pname">${loc.name}</div>
+      const popup=`<div class="pname">${esc(loc.name)}</div>
         <div class="prow"><span class="pk">Lat</span><span class="pv">${Math.abs(loc.lat).toFixed(2)}°${loc.lat>=0?'N':'S'}</span></div>
         <div class="prow"><span class="pk">Type</span><span class="pv">${loc.lat>=0?'Borealis':'Australis'}</span></div>
         <div class="prow"><span class="pk">Score</span><span class="pv" style="color:${col}">${sc}%</span></div>
-        <div class="prow"><span class="pk">Dark Sky</span><span class="pv">${plainSky(loc.darkSky)}</span></div>
+        <div class="prow"><span class="pk">Dark Sky</span><span class="pv">${esc(plainSky(loc.darkSky))}</span></div>
         <div class="prow"><span class="pk">Min Kp</span><span class="pv">${loc.minKp}</span></div>
-        <button class="ppbtn" onclick="selectLocByName('${sn}')">SELECT</button>`;
+        <button class="ppbtn" data-locname="${esc(loc.name)}">SELECT</button>`;
       // Hidden zero-size marker purely for popup — positioned at canonical lon
       const m = L.marker([loc.lat, loc.lon], {
         icon: L.divIcon({className:'', iconSize:[0,0], iconAnchor:[0,0]}),
         interactive: false
       }).bindPopup(popup, {closeButton:false}).addTo(this._map);
+      m.on('popupopen', ()=>{
+        const btn = m.getPopup()?.getElement()?.querySelector('.ppbtn');
+        if(btn) btn.addEventListener('click', ()=>selectLocByName(btn.dataset.locname));
+      });
       m._ncLoc = loc;
       this._popupMarkers.push(m);
     });
@@ -2537,25 +2567,32 @@ function positionPortal(){
 }
 
 function spotHTML(spots){
+  // Returns array of DOM elements — safe, no inline event handlers, no innerHTML injection
   return spots.map(loc=>{
     const isSaved=savedLocs.some(s=>s.name===loc.name);
-    const sn=loc.name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
-    const locJson=JSON.stringify({name:loc.name,lat:loc.lat,lon:loc.lon,darkSky:loc.darkSky,minKp:loc.minKp});
-    return`<div class="sri">
-      <div class="sri-left" onclick="jumpToLoc(${loc.lat},${loc.lon},'${sn}')">
-        <div class="sri-name">${loc.name} <span style="font-size:9px;color:var(--muted)">${loc.tag||''}</span></div>
-        <div class="sri-sub">${Math.abs(loc.lat).toFixed(1)}°${loc.lat>=0?'N':'S'} · ${loc.lat>=0?i18n('borealis'):i18n('australis')} · ${plainSky(loc.darkSky)}</div>
+    const el=document.createElement('div'); el.className='sri';
+    el.innerHTML=`<div class="sri-left">
+        <div class="sri-name">${esc(loc.name)} <span style="font-size:9px;color:var(--muted)">${esc(loc.tag||'')}</span></div>
+        <div class="sri-sub">${Math.abs(loc.lat).toFixed(1)}°${loc.lat>=0?'N':'S'} · ${loc.lat>=0?i18n('borealis'):i18n('australis')} · ${esc(plainSky(loc.darkSky))}</div>
       </div>
-      ${isSaved?`<span class="saved-tag">${i18n('alreadySaved')}</span>`:`<button class="save-btn" onclick="event.stopPropagation();addLoc(${locJson.replace(/"/g,'&quot;')})">+ Save</button>`}
-    </div>`;
-  }).join('');
+      ${isSaved
+        ?`<span class="saved-tag">${i18n('alreadySaved')}</span>`
+        :`<button class="save-btn">+ Save</button>`}`;
+    el.querySelector('.sri-left')?.addEventListener('click',()=>jumpToLoc(loc.lat,loc.lon,loc.name));
+    if(!isSaved) el.querySelector('.save-btn')?.addEventListener('click',e=>{
+      e.stopPropagation();
+      addLoc({name:loc.name,lat:loc.lat,lon:loc.lon,darkSky:loc.darkSky,minKp:loc.minKp});
+    });
+    return el;
+  });
 }
 
 function showSpots(q){
   const matches=q?AURORA_SPOTS.filter(s=>s.name.toLowerCase().includes(q.toLowerCase())):AURORA_SPOTS;
   if(!matches.length)return false;
   positionPortal();
-  searchPortal.innerHTML=(q?'':'<div class="s-section-hdr">⭐ Top Aurora Destinations</div>')+spotHTML(matches);
+  searchPortal.innerHTML=(q?'':'<div class="s-section-hdr">⭐ Top Aurora Destinations</div>');
+  spotHTML(matches).forEach(el=>searchPortal.appendChild(el));
   searchPortal.style.display='block';
   return true;
 }
@@ -2586,19 +2623,25 @@ searchInput.addEventListener('input',function(){
         const lat=parseFloat(item.lat),lon=parseFloat(item.lon);
         const darkSky=estimateDarkSky(lat),minKp=estimateMinKp(lat);
         const isSaved=savedLocs.some(s=>s.name===name);
-        const sn=name.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
         const pid=item.place_id;
-        return`<div class="sri">
-          <div class="sri-left" onclick="jumpToLoc(${lat},${lon},'${sn}')">
-            <div class="sri-name">${name}</div>
-            <div class="sri-sub">${lat.toFixed(2)}°${lat>=0?'N':'S'} · ${lat>=0?i18n('borealis'):i18n('australis')} · ${darkSky}</div>
+        const el=document.createElement('div'); el.className='sri';
+        el.innerHTML=`<div class="sri-left" data-lat="${lat}" data-lon="${lon}" data-name="${esc(name)}">
+            <div class="sri-name">${esc(name)}</div>
+            <div class="sri-sub">${lat.toFixed(2)}°${lat>=0?'N':'S'} · ${lat>=0?i18n('borealis'):i18n('australis')} · ${esc(darkSky)}</div>
           </div>
-          ${isSaved?`<span class="saved-tag">${i18n('alreadySaved')}</span>`:`<button class="save-btn" id="sb-${pid}" onclick="event.stopPropagation();addLocFromGeo('${pid}','${sn}',${lat},${lon},'${darkSky}',${minKp})">+ Save</button>`}
-        </div>`;
+          ${isSaved?`<span class="saved-tag">${i18n('alreadySaved')}</span>`:`<button class="save-btn" id="sb-${esc(pid)}" data-pid="${esc(pid)}" data-name="${esc(name)}" data-lat="${lat}" data-lon="${lon}" data-darksky="${esc(darkSky)}" data-minkp="${minKp}">+ Save</button>`}`;
+        el.querySelector('.sri-left')?.addEventListener('click',()=>jumpToLoc(lat,lon,name));
+        el.querySelector('.save-btn')?.addEventListener('click',e=>{e.stopPropagation();addLocFromGeo(pid,name,lat,lon,darkSky,minKp);});
+        return el;
       });
-      const divider=spotMatches.length&&geoItems.length?`<div class="s-section-hdr">Other results</div>`:'';
-      searchPortal.innerHTML=spotHTML(spotMatches)+divider+geoItems.join('');
-      if(!searchPortal.innerHTML.trim()) searchPortal.innerHTML=`<div class="s-state">No results</div>`;
+      searchPortal.innerHTML='';
+      spotHTML(spotMatches).forEach(el=>searchPortal.appendChild(el));
+      if(spotMatches.length&&geoItems.length){
+        const div=document.createElement('div'); div.className='s-section-hdr'; div.textContent='Other results';
+        searchPortal.appendChild(div);
+      }
+      geoItems.forEach(el=>searchPortal.appendChild(el));
+      if(!searchPortal.children.length) searchPortal.innerHTML=`<div class="s-state">No results</div>`;
     }catch(e){if(!spotMatches.length)searchPortal.innerHTML=`<div class="s-state">Search unavailable</div>`;}
   },350);
 });
@@ -2924,8 +2967,8 @@ function renderLocList(kp){
     const act=l.name===activeLoc.name, col=kpHex(kp||0);
     return`<div class="li ${act?'active':''}">
       <div class="li-main" onclick="selectLoc(${i})">
-        <div class="ln">${l.name}</div>
-        <div class="ls">${Math.abs(l.lat).toFixed(1)}°${l.lat>=0?'N':'S'} · ${Math.abs(l.lon).toFixed(1)}°${l.lon>=0?'E':'W'} · ${plainSky(l.darkSky)}</div>
+        <div class="ln">${esc(l.name)}</div>
+        <div class="ls">${Math.abs(l.lat).toFixed(1)}°${l.lat>=0?'N':'S'} · ${Math.abs(l.lon).toFixed(1)}°${l.lon>=0?'E':'W'} · ${esc(plainSky(l.darkSky))}</div>
       </div>
       <div class="lkp" style="${lkpBadgeStyle(col)}">Kp ${(kp||0).toFixed(1)}</div>
       <div class="delbtn" onclick="deleteLoc(${i})" title="Remove">×</div>
@@ -3489,7 +3532,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.82';
+  document.title = ORIG_TITLE || 'NightCompass v0.83';
   kpAlertActive = false;
 }
 
@@ -4772,7 +4815,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.82</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.83</div>
   </div>
 </div>
 </body>
