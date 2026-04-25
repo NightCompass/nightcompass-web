@@ -68,9 +68,12 @@ jobs:
               print(f"kp_history.json failed: {e}")
           PY
 
-          # ── Kp forecast (45-day) ──
+          # ── Kp forecast — noaa-planetary-k-index-forecast.json ──
+          # This is CORS-blocked in browsers but works fine server-side here.
+          # Format: [["time_tag","kp","observed/estimated"],[...], ...]
+          # Row 0 is a header row.
           curl -sf --max-time 15 \
-            "https://services.swpc.noaa.gov/json/45-day-forecast.json" \
+            "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json" \
             -o /tmp/fc_raw.json || true
           python3 - << 'PY'
           import json
@@ -78,15 +81,15 @@ jobs:
               with open('/tmp/fc_raw.json') as f:
                   d = json.load(f)
               out = []
-              for r in d:
-                  if isinstance(r, dict):
-                      val = float(r.get('kp', 0) or 0)
-                      time = r.get('time_tag', '')
-                  elif isinstance(r, list) and len(r) >= 2:
-                      time, val = r[0], float(r[1] or 0)
-                  else:
-                      continue
-                  out.append({"time_tag": time, "kp": round(val, 2)})
+              # Skip header row (row 0 contains column names as strings)
+              rows = d[1:] if (d and isinstance(d[0], list) and isinstance(d[0][1], str)) else d
+              for r in rows:
+                  try:
+                      time = r[0]
+                      val = float(r[1])
+                      out.append({"time_tag": time, "kp": round(val, 2)})
+                  except:
+                      pass
               with open('data/kp_forecast.json', 'w') as f:
                   json.dump(out, f)
               print(f"Forecast: {len(out)} rows")
