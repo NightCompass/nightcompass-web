@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.80</title>
+<title>NightCompass v0.81</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.80</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.81</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1550,155 +1550,131 @@ function probToRGBA(p, bands){
 const AuroraLayer = L.Layer.extend({
   _kp: 3,
   _ovation: null,
-  _lastZoomInt: null,
   initialize(kp){ this._kp=kp; },
-
   onAdd(map){
-    this._map = map;
-    // World canvas — rendered once in Mercator projection, repositioned via CSS transform
-    this._canvas = document.createElement('canvas');
-    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;will-change:transform;transform-origin:top left;';
+    this._map=map;
+    this._canvas=document.createElement('canvas');
+    this._canvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;';
     map.getPanes().overlayPane.appendChild(this._canvas);
-    this._rafId = null;
-    this._onViewChange = ()=>{ this._positionCanvas(); };
-    map.on('move zoom', this._onViewChange, this);
-    map.on('moveend zoomend resize', this._onMoveEnd, this);
-    this._renderWorld();
-    this._positionCanvas();
-    setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.85'; }, 80);
+    this._size={x:0,y:0};
+    this._rafId=null;
+    map.on('moveend', this._onMoveEnd, this);
+    map.on('zoomend resize', this._redraw, this);
+    this._redraw();
+    setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.85'; },80);
   },
-
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
-    map.off('move zoom', this._onViewChange, this);
-    map.off('moveend zoomend resize', this._onMoveEnd, this);
+    map.off('moveend', this._onMoveEnd, this);
+    map.off('zoomend resize', this._redraw, this);
     if(this._rafId) cancelAnimationFrame(this._rafId);
   },
-
-  setKp(kp){ this._kp=kp; this._ovation=null; this._renderWorld(); this._positionCanvas(); },
-  setOvation(data){ this._ovation=data; this._renderWorld(); this._positionCanvas(); },
-
-  // Re-render only if zoom integer changed (visual detail threshold)
+  setKp(kp){ this._kp=kp; this._ovation=null; this._redraw(); },
+  setOvation(data){ this._ovation=data; this._redraw(); },
+  // Pan end: just reposition canvas — don't resize, don't clear, just redraw content
   _onMoveEnd(){
-    const z = Math.round(this._map ? this._map.getZoom() : 2);
-    if(z !== this._lastZoomInt){ this._renderWorld(); }
-    this._positionCanvas();
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+    // Only redraw if size changed (window resize during pan); otherwise just reposition
+    if(size.x===this._size.x && size.y===this._size.y){
+      if(this._rafId) cancelAnimationFrame(this._rafId);
+      this._rafId=requestAnimationFrame(()=>this._paint());
+    } else {
+      this._redraw();
+    }
   },
-
-  // Position the pre-rendered world canvas to match current map view — pure CSS, zero redraw
-  _positionCanvas(){
-    if(!this._canvas || !this._map) return;
+  // Full redraw: resize canvas + repaint. Only on zoom/resize.
+  _redraw(){
+    if(!this._canvas||!this._map) return;
     if(this._rafId) cancelAnimationFrame(this._rafId);
-    this._rafId = requestAnimationFrame(()=>{
-      if(!this._canvas || !this._map) return;
-      const map = this._map;
-      // Top-left of the world canvas in container coordinates
-      const origin = map.project([85.05, -180], map.getZoom()); // NW corner of world
-      const tl = map.containerPointToLayerPoint(map.unprojectOnScreen ? [0,0] : [0,0]);
-      // Get where lat/lon 85°N, -180°W lands on screen
-      const nwScreen = map.latLngToContainerPoint([85.05, -180]);
-      const scale = this._worldScale || 1;
-      this._canvas.style.transform = `translate(${nwScreen.x}px,${nwScreen.y}px) scale(${map.getZoom() >= 2 ? this._computeScale() : scale})`;
+    this._rafId=requestAnimationFrame(()=>{
+      if(!this._canvas||!this._map) return;
+      const map=this._map, size=map.getSize();
+      if(!size.x||!size.y) return;
+      this._canvas.width=size.x; this._canvas.height=size.y;
+      this._size={x:size.x,y:size.y};
+      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      this._paint();
     });
   },
-
-  _computeScale(){
-    if(!this._map || !this._worldW) return 1;
-    const map = this._map;
-    // How many CSS pixels does 360° of longitude span at current zoom?
-    const left  = map.latLngToContainerPoint([0, -180]).x;
-    const right = map.latLngToContainerPoint([0,  180]).x;
-    return (right - left) / this._worldW;
+  _paint(){
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    const ctx=this._canvas.getContext('2d');
+    ctx.clearRect(0,0,size.x,size.y);
+    if(this._ovation) this._drawOvation(ctx,map,size);
+    else this._drawModelled(ctx,map,size);
   },
-
-  // Render full world into offscreen canvas — expensive but called rarely
-  _renderWorld(){
-    if(!this._map) return;
-    const map = this._map;
-    const zoom = Math.max(2, Math.min(4, Math.round(map.getZoom()))); // render at low zoom for speed
-    this._lastZoomInt = Math.round(map.getZoom());
-
-    // World canvas dimensions: full 360° longitude at reference zoom
-    const tileSize = 256;
-    const worldPx = tileSize * Math.pow(2, zoom); // total pixel width at this zoom
-    // Height: Mercator from lat -85 to 85
-    const topY    = map.project([85.05,  -180], zoom).y;
-    const botY    = map.project([-85.05, -180], zoom).y;
-    const worldH  = Math.round(botY - topY);
-    const worldW  = worldPx;
-    this._worldW  = worldW;
-    this._worldH  = worldH;
-    this._worldZoom = zoom;
-
-    const canvas  = this._canvas;
-    canvas.width  = worldW;
-    canvas.height = worldH;
-    // Reset transform while rendering
-    canvas.style.transform = '';
-    canvas.style.width  = worldW + 'px';
-    canvas.style.height = worldH + 'px';
-
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, worldW, worldH);
-
-    // Adaptive step based on reference zoom level
-    const step = Math.max(3, Math.round(12 / zoom));
-
-    if(this._ovation){
-      this._drawOvationWorld(ctx, map, zoom, worldW, worldH, topY, step);
-    } else {
-      this._drawModelledWorld(ctx, map, zoom, worldW, worldH, topY, step);
-    }
-
-    // Blur pass for smooth bands
-    const tmp = document.createElement('canvas');
-    tmp.width = worldW; tmp.height = worldH;
-    const tctx = tmp.getContext('2d');
-    tctx.filter = 'blur(3px)';
-    tctx.drawImage(canvas, 0, 0);
-    ctx.clearRect(0, 0, worldW, worldH);
-    ctx.drawImage(tmp, 0, 0);
-  },
-
-  _drawModelledWorld(ctx, map, zoom, worldW, worldH, topY, step){
-    const kp = this._kp, bands = getAuroraPalette();
-    for(let px = 0; px < worldW; px += step){
-      for(let py = 0; py < worldH; py += step){
-        // Convert world pixel → lat/lng at reference zoom
-        const ll = map.unproject([px + step/2, topY + py + step/2], zoom);
-        const p  = auroraProb(geomLat(ll.lat, ll.lng), kp);
-        if(p < bands[0][0]) continue;
-        const col = probToRGBA(p, bands); if(!col) continue;
-        ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${(col[3]/255).toFixed(2)})`;
-        ctx.fillRect(px, py, step, step);
+  _drawModelled(ctx, map, size){
+    const kp=this._kp, bands=getAuroraPalette();
+    const step=Math.max(2, Math.round(6/map.getZoom()));
+    for(let px=0;px<size.x;px+=step){
+      for(let py=0;py<size.y;py+=step){
+        const ll=map.containerPointToLatLng([px+step/2,py+step/2]);
+        const p=auroraProb(geomLat(ll.lat,ll.lng), kp);
+        if(p<bands[0][0]) continue;
+        const col=probToRGBA(p,bands); if(!col) continue;
+        ctx.fillStyle=`rgba(${col[0]},${col[1]},${col[2]},${(col[3]/255).toFixed(2)})`;
+        ctx.fillRect(px,py,step,step);
       }
     }
+    // Minimal blur — just enough to soften pixel edges, preserve band distinction
+    const tmp=document.createElement('canvas'); tmp.width=size.x; tmp.height=size.y;
+    const tctx=tmp.getContext('2d'); tctx.filter='blur(2px)'; tctx.drawImage(this._canvas,0,0);
+    ctx.clearRect(0,0,size.x,size.y); ctx.drawImage(tmp,0,0);
   },
-
-  _drawOvationWorld(ctx, map, zoom, worldW, worldH, topY, step){
+  _drawOvation(ctx, map, size){
     const bands = getAuroraPalette();
+    const coords = this._ovation.coordinates;
+
+    // Build a fast lookup: for each integer lon (-180..179), store array of {lat, prob}
+    // so we can query by longitude in O(1) during pixel sampling.
     const byLon = {};
-    for(const [lon, lat, prob] of this._ovation.coordinates){
+    for(const [lon, lat, prob] of coords){
       if(prob < bands[0][0]) continue;
-      const key = Math.round(((lon % 360) + 360) % 360) - 180;
+      const key = Math.round(((lon % 360) + 360) % 360) - 180; // normalise to -180..179
       if(!byLon[key]) byLon[key] = [];
       byLon[key].push({lat, prob});
     }
-    for(let px = 0; px < worldW; px += step){
-      for(let py = 0; py < worldH; py += step){
-        const ll  = map.unproject([px + step/2, topY + py + step/2], zoom);
+
+    // Sample every pixel like _drawModelled — inherently handles infinite world wrap
+    const step = Math.max(2, Math.round(6 / map.getZoom()));
+    for(let px = 0; px < size.x; px += step){
+      for(let py = 0; py < size.y; py += step){
+        const ll  = map.containerPointToLatLng([px + step/2, py + step/2]);
+        const lat = ll.lat;
+        // Normalise longitude to -180..179 to match OVATION data range
         const lon = Math.round(((ll.lng % 360) + 360) % 360) - 180;
-        const entries = byLon[lon]; if(!entries) continue;
+
+        // Find best matching OVATION entry at this longitude
+        const entries = byLon[lon];
+        if(!entries) continue;
+        // Pick the entry whose latitude is closest to the screen pixel's latitude
         let best = null, bestDist = Infinity;
-        for(const e of entries){ const d=Math.abs(e.lat-ll.lat); if(d<bestDist){bestDist=d;best=e;} }
+        for(const e of entries){
+          const d = Math.abs(e.lat - lat);
+          if(d < bestDist){ bestDist = d; best = e; }
+        }
         if(!best || bestDist > 1.5 || best.prob < bands[0][0]) continue;
-        const col = probToRGBA(best.prob, bands); if(!col) continue;
+
+        const col = probToRGBA(best.prob, bands);
+        if(!col) continue;
         ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${(col[3]/255).toFixed(2)})`;
         ctx.fillRect(px, py, step, step);
       }
     }
+    // Same minimal blur as modelled layer for visual consistency
+    const tmp = document.createElement('canvas');
+    tmp.width = size.x; tmp.height = size.y;
+    const tctx = tmp.getContext('2d');
+    tctx.filter = 'blur(2px)';
+    tctx.drawImage(this._canvas, 0, 0);
+    ctx.clearRect(0, 0, size.x, size.y);
+    ctx.drawImage(tmp, 0, 0);
   }
-})
+});
+
 function drawAuroraLayer(kp){
   if(!ncMap) return;
   if(auroraLg){ ncMap.removeLayer(auroraLg); auroraLg=null; }
@@ -1744,20 +1720,14 @@ const CloudCanvasLayer = L.Layer.extend({
   onAdd(map){
     this._map = map;
     this._canvas = document.createElement('canvas');
-    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .6s;will-change:transform;';
+    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .6s;';
     map.getPanes().overlayPane.appendChild(this._canvas);
-    this._onMove = ()=>{
-      if(!this._canvas||!this._map) return;
-      L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0,0]));
-    };
-    map.on('move', this._onMove, this);
     map.on('moveend zoomend resize', this._redraw, this);
     this._redraw();
     setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.66'; }, 60);
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
-    map.off('move', this._onMove, this);
     map.off('moveend zoomend resize', this._redraw, this);
   },
   _redraw(){
@@ -1971,99 +1941,107 @@ function solarElevAngle(latDeg, lonDeg, sunLat, sunLon){
 // Redraws on every map move/zoom so it follows world wrap perfectly.
 const DayNightLayer = L.Layer.extend({
   _date: null,
-  _lastZoomInt: null,
   initialize(date){ this._date = date || new Date(); },
-
   onAdd(map){
     this._map = map;
     this._canvas = document.createElement('canvas');
-    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;will-change:transform;transform-origin:top left;';
+    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
     map.getPanes().overlayPane.appendChild(this._canvas);
-    this._rafId = null;
-    this._onViewChange = ()=>{ this._positionCanvas(); };
-    map.on('move zoom', this._onViewChange, this);
-    map.on('moveend zoomend resize', this._onMoveEnd, this);
-    this._renderWorld();
-    this._positionCanvas();
+    this._size={x:0,y:0};
+    this._rafId=null;
+    map.on('moveend', this._onMoveEnd, this);
+    map.on('zoomend resize', this._redraw, this);
+    this._redraw();
   },
-
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
-    map.off('move zoom', this._onViewChange, this);
-    map.off('moveend zoomend resize', this._onMoveEnd, this);
+    map.off('moveend', this._onMoveEnd, this);
+    map.off('zoomend resize', this._redraw, this);
     if(this._rafId) cancelAnimationFrame(this._rafId);
   },
-
-  setDate(date){ this._date = date; this._renderWorld(); this._positionCanvas(); },
-
+  setDate(date){ this._date = date; this._redraw(); },
   _onMoveEnd(){
-    const z = Math.round(this._map ? this._map.getZoom() : 2);
-    if(z !== this._lastZoomInt){ this._renderWorld(); }
-    this._positionCanvas();
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+    if(size.x===this._size.x && size.y===this._size.y){
+      if(this._rafId) cancelAnimationFrame(this._rafId);
+      this._rafId=requestAnimationFrame(()=>this._paint());
+    } else {
+      this._redraw();
+    }
   },
-
-  _positionCanvas(){
-    if(!this._canvas || !this._map || !this._worldW) return;
+  _redraw(){
+    if(!this._canvas || !this._map) return;
     if(this._rafId) cancelAnimationFrame(this._rafId);
-    this._rafId = requestAnimationFrame(()=>{
-      if(!this._canvas || !this._map) return;
-      const map = this._map;
-      const nwScreen = map.latLngToContainerPoint([85.05, -180]);
-      const left  = map.latLngToContainerPoint([0, -180]).x;
-      const right = map.latLngToContainerPoint([0,  180]).x;
-      const scale = (right - left) / this._worldW;
-      this._canvas.style.transform = `translate(${nwScreen.x}px,${nwScreen.y}px) scale(${scale})`;
+    this._rafId=requestAnimationFrame(()=>{
+      if(!this._canvas||!this._map) return;
+      const map  = this._map;
+      const size = map.getSize();
+      if(!size.x || !size.y) return;
+      this._canvas.width  = size.x;
+      this._canvas.height = size.y;
+      this._size={x:size.x,y:size.y};
+      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      this._paint();
     });
   },
+  _paint(){
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    const ctx = this._canvas.getContext('2d');
+    ctx.clearRect(0, 0, size.x, size.y);
 
-  _renderWorld(){
-    if(!this._map) return;
-    const map  = this._map;
-    const zoom = Math.max(2, Math.min(4, Math.round(map.getZoom())));
-    this._lastZoomInt = Math.round(map.getZoom());
-    const tileSize = 256;
-    const worldW = tileSize * Math.pow(2, zoom);
-    const topY   = map.project([85.05, -180], zoom).y;
-    const botY   = map.project([-85.05,-180], zoom).y;
-    const worldH = Math.round(botY - topY);
-    this._worldW = worldW;
-    this._worldH = worldH;
-
-    const canvas = this._canvas;
-    canvas.width  = worldW;
-    canvas.height = worldH;
-    canvas.style.transform = '';
-    canvas.style.width  = worldW + 'px';
-    canvas.style.height = worldH + 'px';
-
-    const ctx  = canvas.getContext('2d');
     const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
-    const step = Math.max(3, Math.round(12 / zoom));
-    const imgData = ctx.createImageData(worldW, worldH);
 
-    for(let px = 0; px < worldW; px += step){
-      for(let py = 0; py < worldH; py += step){
-        const ll   = map.unproject([px + step/2, topY + py + step/2], zoom);
+    // Step 4px — good balance of speed and smoothness
+    const step = 4;
+    const imgData = ctx.createImageData(size.x, size.y);
+
+    for(let px = 0; px < size.x; px += step){
+      for(let py = 0; py < size.y; py += step){
+        const ll   = map.containerPointToLatLng([px + step/2, py + step/2]);
         const elev = solarElevAngle(ll.lat, ll.lng, sunLat, sunLon);
+
+        // Opacity curve — harder transitions, closer to reference image:
+        // full day (elev > 3°)    → 0   (transparent)
+        // golden hour (0–3°)      → 0–0.10 (subtle warm edge on day side)
+        // blue hour / civil (-6°) → 0.10–0.38 (steeper ramp)
+        // nautical twilight (-12°)→ 0.38–0.58
+        // astronomical (-18°)     → 0.58–0.68
+        // deep night (< -18°)     → 0.68 (uniform dark)
         let alpha = 0;
-        if     (elev <= -18) alpha = 0.68;
-        else if(elev <  -12) alpha = 0.58 + 0.10 * (-12 - elev) / 6;
-        else if(elev <   -6) alpha = 0.38 + 0.20 * (-6  - elev) / 6;
-        else if(elev <    0) alpha = 0.10 + 0.28 * (0   - elev) / 6;
-        else if(elev <    3) alpha = 0.10 * (3    - elev) / 3;
+        if(elev <= -18){
+          alpha = 0.68;
+        } else if(elev < -12){
+          alpha = 0.58 + 0.10 * (-12 - elev) / 6;
+        } else if(elev < -6){
+          alpha = 0.38 + 0.20 * (-6  - elev) / 6;
+        } else if(elev < 0){
+          alpha = 0.10 + 0.28 * (0   - elev) / 6;
+        } else if(elev < 3){
+          alpha = 0.10 * (3 - elev) / 3;
+        }
+
         if(alpha < 0.01) continue;
+
+        // Night colour: deep blue-navy (matches reference)
         const a255 = Math.round(alpha * 255);
-        for(let dx = 0; dx < step && px+dx < worldW; dx++){
-          for(let dy = 0; dy < step && py+dy < worldH; dy++){
-            const i = ((py+dy)*worldW + (px+dx))*4;
-            imgData.data[i]=15; imgData.data[i+1]=28; imgData.data[i+2]=64; imgData.data[i+3]=a255;
+        for(let dx = 0; dx < step && px+dx < size.x; dx++){
+          for(let dy = 0; dy < step && py+dy < size.y; dy++){
+            const i = ((py+dy)*size.x + (px+dx)) * 4;
+            imgData.data[i]   = 15;   // R
+            imgData.data[i+1] = 28;   // G
+            imgData.data[i+2] = 64;   // B
+            imgData.data[i+3] = a255;
           }
         }
       }
     }
     ctx.putImageData(imgData, 0, 0);
   }
-})
+});
+
 function drawDayNight(){
   if(!ncMap) return;
   if(dayNightLg){ ncMap.removeLayer(dayNightLg); dayNightLg = null; }
@@ -2164,13 +2142,6 @@ const PinLayer = L.Layer.extend({
     this._hitDiv.style.cssText = 'position:absolute;inset:0;z-index:400;cursor:pointer;';
     map.getPanes().overlayPane.appendChild(this._hitDiv);
     this._hitDiv.addEventListener('click', e => this._onClick(e));
-    this._onMove = ()=>{
-      if(!this._canvas||!this._map) return;
-      const tl = this._map.containerPointToLayerPoint([0,0]);
-      L.DomUtil.setPosition(this._canvas, tl);
-      if(this._hitDiv) L.DomUtil.setPosition(this._hitDiv, tl);
-    };
-    map.on('move', this._onMove, this);
     map.on('moveend zoomend resize', this._redraw, this);
     this._addPopupMarkers();
     this._redraw();
@@ -2180,7 +2151,6 @@ const PinLayer = L.Layer.extend({
     if(this._hitDiv){ map.getPanes().overlayPane.removeChild(this._hitDiv); this._hitDiv=null; }
     this._popupMarkers.forEach(m=>map.removeLayer(m));
     this._popupMarkers = [];
-    map.off('move', this._onMove, this);
     map.off('moveend zoomend resize', this._redraw, this);
   },
   setKp(kp){ this._kp=kp; this._removePopupMarkers(); this._addPopupMarkers(); this._redraw(); },
@@ -2211,25 +2181,26 @@ const PinLayer = L.Layer.extend({
   },
   _redraw(){
     if(!this._canvas||!this._map) return;
-    requestAnimationFrame(()=>{
-      if(!this._canvas||!this._map) return;
-      const map=this._map, size=map.getSize();
-      if(!size.x || !size.y) return;
-      this._canvas.width=size.x; this._canvas.height=size.y;
-      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-      if(this._hitDiv) L.DomUtil.setPosition(this._hitDiv, map.containerPointToLayerPoint([0,0]));
-      const ctx=this._canvas.getContext('2d');
-      ctx.clearRect(0,0,size.x,size.y);
-      if(!layers.pins) return;
-      const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
-      savedLocs.forEach(loc=>{
-        const sc=visScore(this._kp,loc), col=sc>65?'#00ffa3':sc>35?'#facc15':'#f97316';
-        const pt = map.latLngToContainerPoint([loc.lat, loc.lon]);
-        for(let wx = pt.x - Math.ceil((pt.x + size.x) / worldPx) * worldPx;
-                wx < size.x + worldPx; wx += worldPx){
-          this._drawPin(ctx, wx, pt.y, col, loc.name===activeLoc?.name);
-        }
-      });
+    const map=this._map, size=map.getSize();
+    if(!size.x || !size.y) return;
+    this._canvas.width=size.x; this._canvas.height=size.y;
+    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+    if(this._hitDiv) L.DomUtil.setPosition(this._hitDiv, map.containerPointToLayerPoint([0,0]));
+    const ctx=this._canvas.getContext('2d');
+    ctx.clearRect(0,0,size.x,size.y);
+    if(!layers.pins) return;
+
+    // Full-world width in screen pixels at current zoom
+    const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
+
+    savedLocs.forEach(loc=>{
+      const sc=visScore(this._kp,loc), col=sc>65?'#00ffa3':sc>35?'#facc15':'#f97316';
+      const pt = map.latLngToContainerPoint([loc.lat, loc.lon]);
+      // Step through all world copies visible on screen (and one beyond each edge)
+      for(let wx = pt.x - Math.ceil((pt.x + size.x) / worldPx) * worldPx;
+              wx < size.x + worldPx; wx += worldPx){
+        this._drawPin(ctx, wx, pt.y, col, loc.name===activeLoc?.name);
+      }
     });
   },
   _drawPin(ctx, x, y, col, isActive){
@@ -3516,7 +3487,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.80';
+  document.title = ORIG_TITLE || 'NightCompass v0.81';
   kpAlertActive = false;
 }
 
@@ -4799,7 +4770,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.80</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.81</div>
   </div>
 </div>
 </body>
