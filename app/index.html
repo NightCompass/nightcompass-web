@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.77</title>
+<title>NightCompass v0.78</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -515,7 +515,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <div style="color:var(--text);font-weight:500;margin-bottom:4px;">🧭 NightCompass</div>
       <div id="sd-credits-by">Designed & built by <span style="color:var(--green);">Romain Aubry</span></div>
       <div style="margin-top:4px;">
-        <a href="https://www.instagram.com/narziat/" target="_blank"
+        <a href="https://www.instagram.com/narziat/" target="_blank" rel="noopener noreferrer"
            style="color:var(--teal);text-decoration:none;display:inline-flex;align-items:center;gap:5px;">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/><line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/></svg>
           @narziat
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.77</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.78</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1232,32 +1232,38 @@ function resetStaleTimer(){
 // ── NOAA FETCH ────────────────────────────────────────────────────────────────
 // Proxy chain (antivirus-safe — no data-broker proxies):
 //   1. Direct fetch — works when NOAA sends CORS headers (most /json/ endpoints)
-//   2. corsproxy.io  — transparent open-source proxy, no registration required
-//   3. cors.sh       — simple maintained proxy, different infrastructure = diversity
-// Removed: allorigins.win (AV-flagged), thingproxy (unreliable), codetabs (AV-flagged)
-// Policy: no public CORS proxy is added without explicit AV vetting.
-// Primary data path is always same-origin NC_DATA (GitHub Actions cache).
+// Proxy policy:
+//   Primary:  same-origin NC_DATA cache (GitHub Actions, zero CORS, zero third parties)
+//   Fallback: NightCompass Cloudflare Worker — our infrastructure, locked to NOAA only
+//   Direct:   NOAA /json/ endpoints expose open CORS — no proxy needed
+//   Removed:  corsproxy.io, cors.sh, codetabs, allorigins, thingproxy (all AV-risk)
+//
+// ⚠ DEPLOY STEP: replace NC_WORKER_URL with your actual Worker URL after deployment.
+//   Format: https://nightcompass-noaa-proxy.YOUR-SUBDOMAIN.workers.dev
+//   Until deployed, the Worker path is skipped gracefully — NC_DATA cache is the primary.
+const NC_WORKER_URL = 'https://nightcompass-noaa-proxy.nightcompass.workers.dev';  // ← replace after Cloudflare Worker setup
+
 async function noaaFetch(path, timeout=8000){
   const url='https://services.swpc.noaa.gov'+path;
-  // 1. Direct — NOAA /json/ endpoints send Access-Control-Allow-Origin: *
-  //    /products/ endpoints are CORS-blocked but worth trying (policy changes occasionally)
+
+  // 1. Direct — NOAA /json/ endpoints have open CORS (Access-Control-Allow-Origin: *)
+  //    /products/ endpoints are CORS-blocked server-side, but worth one attempt
   try{
     const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(10000)});
     if(r.ok){ const d=await r.json(); if(d&&(Array.isArray(d)?d.length:true)) return d; }
   }catch(e){}
-  // 2. corsproxy.io — open source, self-hostable, consistent AV record
-  try{
-    const proxy=`https://corsproxy.io/?${encodeURIComponent(url)}`;
-    const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
-    if(r.ok){ const d=await r.json(); if(d) return d; }
-  }catch(e){}
-  // 3. cors.sh — independent infrastructure, consistent AV record
-  try{
-    const proxy=`https://cors.sh/${url}`;
-    const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout),
-      headers:{'x-cors-api-key':'temp_' + Math.random().toString(36).slice(2)}});
-    if(r.ok){ const d=await r.json(); if(d) return d; }
-  }catch(e){}
+
+  // 2. NightCompass Cloudflare Worker — our infrastructure, no third parties
+  //    Locked to services.swpc.noaa.gov only. Free tier: 100k req/day.
+  //    Skip gracefully if not yet deployed.
+  if(NC_WORKER_URL !== 'WORKER_NOT_DEPLOYED'){
+    try{
+      const proxy=`${NC_WORKER_URL}?url=${encodeURIComponent(url)}`;
+      const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
+      if(r.ok){ const d=await r.json(); if(d) return d; }
+    }catch(e){}
+  }
+
   throw new Error('NOAA unavailable');
 }
 
@@ -1275,14 +1281,18 @@ async function loadKp(){
       if(d && d.kp != null) return {kp: parseFloat(d.kp), time: d.time, observed: true};
     }
   }catch(e){}
-  // Priority 2: /json/geospace/geospace_pred_est_kp_1_hour.json — confirmed open CORS
-  // Format: [{"time_tag":"...","estimated_kp":1.67,"kp":"2M",...}, ...]
+  // Priority 2: noaa-planetary-k-index-forecast.json — current data, open CORS via Worker
+  // geospace_pred_est_kp_1_hour.json is frozen at 2024 on NOAA's side — avoided.
+  // Forecast endpoint returns objects: {time_tag, kp, observed, noaa_scale}
   try{
-    const d = await noaaFetch('/json/geospace/geospace_pred_est_kp_1_hour.json');
+    const d = await noaaFetch('/products/noaa-planetary-k-index-forecast.json');
     if(Array.isArray(d) && d.length){
-      const last = d[d.length - 1];
-      const val = parseFloat(last.estimated_kp ?? last.kp_index ?? last.kp);
-      if(!isNaN(val)) return {kp: val, time: last.time_tag, observed: true};
+      // Get the last observed or estimated entry — most recent real measurement
+      const real = d.filter(r => r.observed === 'observed' || r.observed === 'estimated');
+      const last = real.length ? real[real.length-1] : d[d.length-1];
+      const val = parseFloat(last.kp ?? last.k ?? last.estimated_kp);
+      const time = last.time_tag ?? last.model_prediction_time ?? '';
+      if(!isNaN(val)) return {kp: val, time, observed: true};
     }
   }catch(e){}
   // Priority 3: planetary_k_index_1m.json
@@ -1840,7 +1850,7 @@ function initMap(){
   if(typeof L.maplibreGL === 'function'){
     baseTileLayer = L.maplibreGL({
       style: OFM_STYLES[getMapStyle()],
-      attribution: '© <a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors',
+      attribution: '© <a href="https://openfreemap.org" target="_blank" rel="noopener noreferrer">OpenFreeMap</a> © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors',
     }).addTo(ncMap);
   } else {
     // Bridge script failed to load — fall back to plain OSM raster tiles
@@ -2013,7 +2023,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.66'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.77 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2379,7 +2389,7 @@ function addLpLayer(){
     maxZoom:     8,
     opacity:     lpOpacity,
     zIndex:      5,
-    attribution: 'Light pollution: <a href="https://earthdata.nasa.gov" target="_blank">NASA VIIRS · Bortle heatmap</a>',
+    attribution: 'Light pollution: <a href="https://earthdata.nasa.gov" target="_blank" rel="noopener noreferrer">NASA VIIRS · Bortle heatmap</a>',
   });
   lpTileLayer.addTo(ncMap);
 
@@ -2507,7 +2517,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.66'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.77 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -2842,7 +2852,7 @@ function renderAlerts(alerts, containerId='alertsArea'){
 
   el.innerHTML = recent.map(a=>{
     const {title, col} = decodeProduct(a.product_id);
-    const msg = parseMessage(a.message);
+    const msg = parseMessage(a.message).replace(/</g,'&lt;').replace(/>/g,'&gt;');
     const dt  = a.issue_datetime ? fmtLocalTime(new Date(a.issue_datetime).getTime()) : '';
     return `<div class="ac" style="border-left:3px solid ${col};padding-left:10px;margin-bottom:8px;">
       <div class="at" style="color:${col};margin-bottom:3px;">⚡ ${title}</div>
@@ -3422,7 +3432,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.77';
+  document.title = ORIG_TITLE || 'NightCompass v0.78';
   kpAlertActive = false;
 }
 
@@ -4631,7 +4641,7 @@ function refreshDiag(){
       diagItem('NOAA status', noaaOk ? lastUpd.substring(0,25) : 'UNREACHABLE', noaaOk?'ok':'err') +
       diagItem('Kp forecast bars', fcOk2 ? 'rendered' : 'failed/retrying', fcOk2?'ok':'warn') +
       diagItem('Active alerts', alertPill, alertPill.includes('0')?'idle':'ok') +
-      diagItem('CORS proxy chain', 'corsproxy.io → cors.sh', 'idle') +
+      diagItem('NOAA Worker', NC_WORKER_URL==='WORKER_NOT_DEPLOYED'?'not deployed yet':'active', NC_WORKER_URL==='WORKER_NOT_DEPLOYED'?'warn':'ok') +
       diagItem('NC_DATA cache', cachedFc?.length ? `${cachedFc.length} rows` : 'miss — check /data/', cachedFc?.length?'ok':'err');
   }
 
@@ -4674,7 +4684,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.77</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.78</div>
   </div>
 </div>
 </body>
