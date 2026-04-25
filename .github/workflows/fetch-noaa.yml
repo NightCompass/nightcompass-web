@@ -1,9 +1,21 @@
 name: Fetch NOAA Space Weather Data
 
 on:
+  # ── Automatic: every 10 minutes ──────────────────────────────────────────
   schedule:
     - cron: '*/10 * * * *'
+
+  # ── Manual trigger from GitHub Actions UI ────────────────────────────────
   workflow_dispatch:
+
+  # ── AUTO-BOOTSTRAP: run on first push to main ─────────────────────────────
+  # This eliminates the human dependency — as soon as the workflow file
+  # is committed to the repo, a first data fetch runs automatically.
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/fetch-noaa.yml'
 
 permissions:
   contents: write
@@ -22,7 +34,9 @@ jobs:
         run: |
           mkdir -p data
 
-          # ── Current Kp (1-hour geospace) ──
+          echo "▶ Fetching NOAA data at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          # ── Current Kp (1-hour geospace) ──────────────────────────────────
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/json/geospace/geospace_pred_est_kp_1_hour.json" \
             -o /tmp/kp_raw.json || true
@@ -40,12 +54,14 @@ jobs:
               out = {"kp": round(val, 2), "time": last.get("time_tag", ""), "source": "geospace_pred_est_kp_1_hour"}
               with open('data/kp.json', 'w') as f:
                   json.dump(out, f)
-              print(f"Kp: {out['kp']} at {out['time']}")
+              print(f"✓ kp.json: Kp {out['kp']} at {out['time']}")
           except Exception as e:
-              print(f"kp.json failed: {e}")
+              print(f"✗ kp.json failed: {e}")
           PY
 
-          # ── Kp history — planetary_k_index_1m (today's 1-min data) ──
+          # ── Kp history — planetary_k_index_1m (today's 1-min data) ───────
+          # NOTE: This only covers today. Multi-day rolling history is a
+          # planned improvement (append to a rolling JSON file).
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json" \
             -o /tmp/kp1m_raw.json || true
@@ -63,13 +79,13 @@ jobs:
                       pass
               with open('data/kp_history.json', 'w') as f:
                   json.dump(out, f)
-              print(f"History: {len(out)} rows")
+              print(f"✓ kp_history.json: {len(out)} rows")
           except Exception as e:
-              print(f"kp_history.json failed: {e}")
+              print(f"✗ kp_history.json failed: {e}")
           PY
 
-          # ── Kp forecast — noaa-planetary-k-index-forecast.json ──
-          # This is CORS-blocked in browsers but works fine server-side here.
+          # ── Kp forecast — noaa-planetary-k-index-forecast.json ───────────
+          # CORS-blocked in browsers — fetched server-side here.
           # Format: [["time_tag","kp","observed/estimated"],[...], ...]
           # Row 0 is a header row.
           curl -sf --max-time 15 \
@@ -81,45 +97,65 @@ jobs:
               with open('/tmp/fc_raw.json') as f:
                   d = json.load(f)
               out = []
-              # Skip header row (row 0 contains column names as strings)
               rows = d[1:] if (d and isinstance(d[0], list) and isinstance(d[0][1], str)) else d
               for r in rows:
                   try:
-                      time = r[0]
-                      val = float(r[1])
-                      out.append({"time_tag": time, "kp": round(val, 2)})
+                      out.append({"time_tag": r[0], "kp": round(float(r[1]), 2)})
                   except:
                       pass
               with open('data/kp_forecast.json', 'w') as f:
                   json.dump(out, f)
-              print(f"Forecast: {len(out)} rows")
+              print(f"✓ kp_forecast.json: {len(out)} rows")
           except Exception as e:
-              print(f"kp_forecast.json failed: {e}")
+              print(f"✗ kp_forecast.json failed: {e}")
           PY
 
-          # ── Solar wind plasma ──
+          # ── Solar wind plasma ─────────────────────────────────────────────
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/products/solar-wind/plasma-2-hour.json" \
             -o data/solar_wind_plasma.json || true
+          [ -f data/solar_wind_plasma.json ] && echo "✓ solar_wind_plasma.json" || echo "✗ solar_wind_plasma.json failed"
 
-          # ── Solar wind mag ──
+          # ── Solar wind mag ────────────────────────────────────────────────
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/products/solar-wind/mag-2-hour.json" \
             -o data/solar_wind_mag.json || true
+          [ -f data/solar_wind_mag.json ] && echo "✓ solar_wind_mag.json" || echo "✗ solar_wind_mag.json failed"
 
-          # ── Alerts ──
+          # ── Alerts ────────────────────────────────────────────────────────
           curl -sf --max-time 15 \
             "https://services.swpc.noaa.gov/products/alerts.json" \
             -o data/alerts.json || true
+          [ -f data/alerts.json ] && echo "✓ alerts.json" || echo "✗ alerts.json failed"
 
-          # ── Timestamp ──
+          # ── GOES X-ray (6-hour) ───────────────────────────────────────────
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/json/goes/primary/xrays-6-hour.json" \
+            -o data/xrays_6h.json || true
+          [ -f data/xrays_6h.json ] && echo "✓ xrays_6h.json" || echo "✗ xrays_6h.json failed"
+
+          # ── Integral protons (6-hour) ─────────────────────────────────────
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/json/goes/primary/integral-protons-6-hour.json" \
+            -o data/protons_6h.json || true
+          [ -f data/protons_6h.json ] && echo "✓ protons_6h.json" || echo "✗ protons_6h.json failed"
+
+          # ── Solar cycle predicted ─────────────────────────────────────────
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/json/solar-cycle/predicted-solar-cycle.json" \
+            -o data/solar_cycle.json || true
+          [ -f data/solar_cycle.json ] && echo "✓ solar_cycle.json" || echo "✗ solar_cycle.json failed"
+
+          # ── Fetch timestamp ───────────────────────────────────────────────
           python3 -c "
           import json
           from datetime import datetime, timezone
           with open('data/meta.json','w') as f:
               json.dump({'fetched_utc': datetime.now(timezone.utc).isoformat(), 'source': 'NOAA SWPC'}, f)
           "
+          echo "✓ meta.json written"
 
+          echo ""
           echo "=== data/ contents ==="
           ls -lh data/
 
@@ -128,6 +164,6 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/
-          git diff --cached --quiet && echo "No changes" || \
-            git commit -m "chore: NOAA data update $(date -u '+%Y-%m-%dT%H:%M:%SZ')" && \
-            git push
+          git diff --cached --quiet \
+            && echo "No changes — NOAA data unchanged since last run" \
+            || (git commit -m "chore: NOAA data update $(date -u '+%Y-%m-%dT%H:%M:%SZ')" && git push)
