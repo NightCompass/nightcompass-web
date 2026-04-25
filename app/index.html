@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.87</title>
+<title>NightCompass v0.88</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.87</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.88</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -597,6 +597,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <div style="padding-bottom:6px">
         <div class="kpil">Geomagnetic Activity</div>
         <div class="kpst" id="kpSt">Loading...</div>
+        <div id="kpSrcBadge" style="font-size:8px;letter-spacing:.4px;color:var(--muted);margin-top:3px;display:none"></div>
       </div>
     </div>
     <div class="kpbw"><div class="kpbf" id="kpBf" style="width:0%"></div></div>
@@ -1292,39 +1293,58 @@ async function noaaFetch(path, timeout=8000){
 const NC_DATA = '/data/';  // served from nightcompass.net/data/
 
 async function loadKp(){
-  // Priority 1: same-origin GitHub Actions cache — zero CORS, always works
+  // Priority 1: planetary_k_index_1m.json — open CORS on /json/, ~1-min latency, estimated Kp
+  // This is the most real-time source available. "Estimated" = derived from magnetometer
+  // network in near-real-time, not the official 3-hour finalised value.
+  try{
+    const r = await fetch('https://services.swpc.noaa.gov/json/planetary_k_index_1m.json',
+      {cache:'no-store', signal:AbortSignal.timeout(6000)});
+    if(r.ok){
+      const d = await r.json();
+      if(Array.isArray(d) && d.length){
+        const raw = (typeof d[0][1]==='string' && isNaN(parseFloat(d[0][1]))) ? d.slice(1) : d;
+        for(let i=raw.length-1; i>=0; i--){
+          const val = parseFloat(raw[i][1]);
+          if(!isNaN(val) && val >= 0)
+            return {kp: val, time: raw[i][0], observed: false, source: '1min'};
+        }
+      }
+    }
+  }catch(e){}
+
+  // Priority 2: same-origin kp_1m_latest.json (GitHub Actions cache of 1-min reading)
+  // Used when direct NOAA fetch above fails (offline, network restriction, etc.)
+  try{
+    const r = await fetch(NC_DATA+'kp_1m_latest.json', {cache:'no-store', signal:AbortSignal.timeout(4000)});
+    if(r.ok){
+      const d = await r.json();
+      if(d && d.kp != null)
+        return {kp: parseFloat(d.kp), time: d.time, observed: false, source: '1min-cache'};
+    }
+  }catch(e){}
+
+  // Priority 3: same-origin kp.json (GitHub Actions cache — 3h observed Kp)
   try{
     const r = await fetch(NC_DATA+'kp.json', {cache:'no-store', signal:AbortSignal.timeout(4000)});
     if(r.ok){
       const d = await r.json();
-      if(d && d.kp != null) return {kp: parseFloat(d.kp), time: d.time, observed: true};
+      if(d && d.kp != null)
+        return {kp: parseFloat(d.kp), time: d.time, observed: true, source: '3h-cache'};
     }
   }catch(e){}
-  // Priority 2: noaa-planetary-k-index-forecast.json — current data, open CORS via Worker
-  // geospace_pred_est_kp_1_hour.json is frozen at 2024 on NOAA's side — avoided.
-  // Forecast endpoint returns objects: {time_tag, kp, observed, noaa_scale}
+
+  // Priority 4: noaa-planetary-k-index-forecast.json via Worker (3h observed, CORS-blocked direct)
   try{
     const d = await noaaFetch('/products/noaa-planetary-k-index-forecast.json');
     if(Array.isArray(d) && d.length){
-      // Get the last observed or estimated entry — most recent real measurement
       const real = d.filter(r => r.observed === 'observed' || r.observed === 'estimated');
       const last = real.length ? real[real.length-1] : d[d.length-1];
-      const val = parseFloat(last.kp ?? last.k ?? last.estimated_kp);
+      const val  = parseFloat(last.kp ?? last.k ?? last.estimated_kp);
       const time = last.time_tag ?? last.model_prediction_time ?? '';
-      if(!isNaN(val)) return {kp: val, time, observed: true};
+      if(!isNaN(val)) return {kp: val, time, observed: true, source: '3h-forecast'};
     }
   }catch(e){}
-  // Priority 3: planetary_k_index_1m.json
-  try{
-    const d = await noaaFetch('/json/planetary_k_index_1m.json');
-    if(Array.isArray(d) && d.length){
-      const raw = (typeof d[0][1]==='string'&&isNaN(parseFloat(d[0][1]))) ? d.slice(1) : d;
-      for(let i=raw.length-1;i>=0;i--){
-        const val=parseFloat(raw[i][1]);
-        if(!isNaN(val)&&val>=0) return {kp:val, time:raw[i][0], observed:true};
-      }
-    }
-  }catch(e){}
+
   throw new Error('No valid Kp');
 }
 
@@ -2082,7 +2102,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.81 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.88 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2587,7 +2607,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.81 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.88 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -2658,15 +2678,40 @@ function renderKp(data){
   document.getElementById('kpBf').style.width       = (kp!==null && !isFallback) ? (kp/9*100)+'%' : '0%';
   document.getElementById('kpBf').style.background  = `linear-gradient(90deg,#00ffa3,${col})`;
 
+  // Source badge — shows data freshness below the storm label
+  const badge = document.getElementById('kpSrcBadge');
+  if(badge && !isFallback){
+    const src = data.source;
+    if(src === '1min'){
+      badge.textContent = '⚡ estimated · ~1 min resolution';
+      badge.style.color = 'var(--muted)';
+    } else if(src === '1min-cache'){
+      badge.textContent = '⚡ estimated · cached (1-min)';
+      badge.style.color = 'var(--muted)';
+    } else {
+      badge.textContent = '⚠ fallback · 3h observed — 1-min unavail';
+      badge.style.color = '#f97316';
+    }
+    badge.style.display = 'block';
+  } else if(badge){
+    badge.style.display = 'none';
+  }
+
   if(isFallback){
     document.getElementById('lastUpd').textContent = i18n('noaa-unreachable');
     document.getElementById('lastUpd').style.color = '#f97316';
   } else {
     const dateObj = safeDate(data.time);
     const ts = !isNaN(dateObj) ? dateObj.toLocaleTimeString(currentLang,{hour:'2-digit',minute:'2-digit'}) : '—';
-    const obs = data.observed ? 'observed' : 'estimated';
-    document.getElementById('lastUpd').textContent = `${ts} UTC · ${obs}`;
-    document.getElementById('lastUpd').style.color = '';
+    // Source label: 1-min sources = "estimated · 1-min"; 3h fallback sources = "observed · 3h ⚠"
+    const src = data.source;
+    let srcLabel;
+    if(src === '1min')       srcLabel = 'estimated · ~1 min';
+    else if(src === '1min-cache') srcLabel = 'estimated · cached';
+    else if(src === '3h-cache' || src === '3h-forecast') srcLabel = 'observed · 3h ⚠ fallback';
+    else srcLabel = data.observed ? 'observed' : 'estimated';
+    document.getElementById('lastUpd').textContent = `${ts} UTC · ${srcLabel}`;
+    document.getElementById('lastUpd').style.color = (src === '3h-cache' || src === '3h-forecast') ? '#f97316' : '';
     // Check alert threshold every time we have fresh real data
     checkKpAlert(kp);
   }
@@ -2683,70 +2728,107 @@ function renderFcBars(rows){
   let nowIdx = rows.findIndex(r => r.time && new Date(r.time).getTime() >= nowMs);
   if(nowIdx < 0) nowIdx = rows.length - 1; // all past — point to last
 
-  // Window: exactly 12 bars before nowIdx, then 36 bars from nowIdx
-  const PAST  = 12;
-  const FUTURE = 36;
-  const winStart = Math.max(0, nowIdx - PAST);
-  const winEnd   = Math.min(rows.length, nowIdx + FUTURE);
-  const windowRows = rows.slice(winStart, winEnd);
-  // NOW line sits between past and future — at column (nowIdx - winStart)
-  const nowColInWindow = nowIdx - winStart;
+  // ── Detect granularity of history rows ───────────────────────────────────────
+  // History (kp_history.json) is 1-minute data → we downsample to 1-hour for display.
+  // Forecast rows are 3-hour blocks.
+  // We detect by checking if consecutive past rows are ~1h apart or ~3h apart.
+  const historyRows = rows.slice(0, nowIdx);
+  const forecastRows = rows.slice(nowIdx);
+
+  // Downsample history to one row per hour (keep the last reading within each hour bucket)
+  const hourBuckets = new Map();
+  for(const r of historyRows){
+    const t = safeDate(r.time);
+    if(isNaN(t)) continue;
+    // Bucket key = YYYY-MM-DDTHH (truncate to hour)
+    const key = t.toISOString().substring(0, 13);
+    hourBuckets.set(key, r); // last row in the bucket wins
+  }
+  // Build sorted 1h history array (last 12 hours)
+  const histSorted = [...hourBuckets.values()]
+    .sort((a,b) => safeDate(a.time) - safeDate(b.time))
+    .slice(-12); // max 12 bars of history
+
+  // Build final merged display rows, tagged with their bar width
+  // History bars: narrow (18px), forecast bars: standard (36px)
+  const HIST_W  = 18, FC_W = 36, GAP = 4;
+  const displayRows = [
+    ...histSorted.map(r => ({...r, barW: HIST_W, isPast: true})),
+    ...forecastRows.map(r => ({...r, barW: FC_W, isPast: false})),
+  ];
+
+  // NOW line sits right at the junction (after last history bar)
+  const nowColInWindow = histSorted.length;
 
   let lastDay = '';
-  const colWidth = 36, gap = 5; // px — must match .fccol width + gap
+  // Track cumulative x offset for positioning NOW line and day separators
+  let cumX = 0;
+  const colOffsets = []; // left-edge pixel of each column
 
-  windowRows.forEach((r, i)=>{
+  displayRows.forEach((r, i) => {
     const col = document.createElement('div');
-    col.className = 'fccol' + (i < nowColInWindow ? ' past' : '');
-    const pct   = Math.max(4,(r.kp/9)*100);
+    col.className = 'fccol' + (r.isPast ? ' past' : '');
+    col.style.width = r.barW + 'px';
+    col.style.flexShrink = '0';
+
+    const pct   = Math.max(4, (r.kp / 9) * 100);
     const color = kpHex(r.kp);
-    const lbl   = r.time ? r.time.substring(11,16) : '+'+i+'h';
+    const lbl   = r.time ? r.time.substring(11, 16) : '+' + i + 'h';
 
     // Day boundary detection
-    const dt = r.time ? new Date(r.time) : null;
-    const dayStr = dt ? dt.toLocaleDateString(currentLang,{weekday:'short',month:'short',day:'numeric'}) : '';
-    const isNewDay = dt && dt.getHours()===0 && dayStr !== lastDay;
+    const dt = r.time ? safeDate(r.time) : null;
+    const dayStr = dt ? dt.toLocaleDateString(currentLang, {weekday:'short', month:'short', day:'numeric'}) : '';
+    const isNewDay = dt && dt.getUTCHours() === 0 && dayStr !== lastDay;
     if(isNewDay) lastDay = dayStr;
 
-    col.innerHTML=`
+    // For 1h history bars, suppress the time label every other bar to avoid crowding
+    const showLbl = r.isPast ? (i % 2 === 0) : true;
+
+    col.innerHTML = `
       <div class="fcbar" style="height:${pct}%;background:${color}" title="Kp ${r.kp.toFixed(1)} — ${r.time||''}"></div>
-      <div class="fcvl" style="color:${color}">${r.kp.toFixed(1)}</div>
-      <div class="fctm">${lbl}</div>`;
+      <div class="fcvl" style="color:${color};font-size:${r.isPast?'7px':'8px'}">${r.kp.toFixed(1)}</div>
+      <div class="fctm" style="opacity:${showLbl?1:0}">${lbl}</div>`;
     col.style.position = 'relative';
     wrap.appendChild(col);
+
+    colOffsets.push(cumX);
+    cumX += r.barW + GAP;
 
     // Day separator vertical rule
     if(isNewDay && i > 0){
       const sep = document.createElement('div');
       sep.className = 'day-sep';
       sep.setAttribute('data-day', dayStr);
-      // Position just before this column
-      const leftPx = i * (colWidth + gap) - 3;
-      sep.style.cssText = `left:${leftPx}px;`;
+      sep.style.cssText = `left:${colOffsets[i]}px;`;
       wrap.appendChild(sep);
     }
   });
 
-  // NOW line — positioned at nowColInWindow
-  if(nowColInWindow >= 0 && nowColInWindow < windowRows.length){
-    const leftPx = nowColInWindow * (colWidth + gap) + colWidth/2;
+  // NOW line — positioned between history and forecast
+  if(nowColInWindow > 0 && nowColInWindow <= displayRows.length){
+    // Left edge of the first forecast bar
+    const leftPx = nowColInWindow > 0
+      ? colOffsets[nowColInWindow] ?? (cumX - (forecastRows[0]?.barW ?? FC_W) - GAP)
+      : 0;
     const line = makeNowLine();
-    line.style.left = leftPx + 'px';
+    line.style.left = (leftPx - 1) + 'px'; // sit just before first forecast bar
     wrap.appendChild(line);
   }
 
-  // Drag scroll — auto-scroll so NOW is visible centred
+  // Drag scroll — auto-scroll so NOW is visible
   const scroll = document.getElementById('fcScroll');
-  let isDrag=false, startX=0, scrollStart=0;
-  scroll.addEventListener('mousedown',e=>{isDrag=true;startX=e.pageX;scrollStart=scroll.scrollLeft;});
-  window.addEventListener('mouseup',()=>{isDrag=false;});
-  scroll.addEventListener('mousemove',e=>{if(!isDrag)return;scroll.scrollLeft=scrollStart-(e.pageX-startX);});
+  let isDrag = false, startX = 0, scrollStart = 0;
+  scroll.addEventListener('mousedown', e => { isDrag=true; startX=e.pageX; scrollStart=scroll.scrollLeft; });
+  window.addEventListener('mouseup', () => { isDrag=false; });
+  scroll.addEventListener('mousemove', e => { if(!isDrag) return; scroll.scrollLeft=scrollStart-(e.pageX-startX); });
 
-  // Scroll so NOW line is roughly centred in the visible area
-  requestAnimationFrame(()=>{
-    const nowPx = nowColInWindow * (colWidth + gap) + colWidth/2;
+  // Scroll so NOW line is visible, centred in the panel
+  requestAnimationFrame(() => {
+    const nowPx = nowColInWindow > 0
+      ? (colOffsets[nowColInWindow] ?? 0)
+      : 0;
     const visWidth = scroll.clientWidth;
-    scroll.scrollLeft = Math.max(0, nowPx - visWidth/2);
+    scroll.scrollLeft = Math.max(0, nowPx - visWidth / 2);
   });
 }
 
@@ -3511,7 +3593,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.87';
+  document.title = ORIG_TITLE || 'NightCompass v0.88';
   kpAlertActive = false;
 }
 
@@ -4796,7 +4878,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.87</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.88</div>
   </div>
 </div>
 </body>
