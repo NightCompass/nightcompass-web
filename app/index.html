@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.73</title>
+<title>NightCompass v0.74</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +556,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.73</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.74</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -632,7 +632,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <button class="lbtn on" id="btnPins"   onclick="toggleLayer('pins',this)"><span id="btn-pins">LOCATIONS</span></button>
       <button class="lbtn on" id="btnDayNight" onclick="toggleLayer('daynight',this)"><span id="btn-daynight">DAY/NIGHT</span></button>
       <button class="lbtn"    id="btnClouds" onclick="toggleLayer('clouds',this)"><span id="btn-clouds">CLOUDS</span></button>
-      <button class="lbtn"    id="btnGrid"   onclick="toggleLayer('grid',this)"><span id="btn-grid">LAT LINES</span></button>
+      <!-- LAT LINES always on — button removed -->
       <button class="lbtn"    id="btnLightPollution" onclick="toggleLayer('lightpollution',this)"><span id="btn-lp">LIGHT POLLUTION</span></button>
     </div>
     <div class="aurora-legend" id="auroraLegend">
@@ -1085,7 +1085,7 @@ if (!savedLocs.length) savedLocs = DEFAULT_LOCS.map(l=>({...l}));
 
 let activeLoc    = savedLocs[0];
 let currentKp    = 3;
-let layers       = {aurora:true, pins:true, clouds:false, grid:false, daynight:true, lightpollution:false};
+let layers       = {aurora:true, pins:true, clouds:false, grid:true,  daynight:true, lightpollution:false};
 let lpTileLayer  = null;   // Leaflet tile layer for light pollution
 let lpYear       = 2023;   // most recent year with confirmed GIBS ENCC data
 let lpOpacity    = 0.70;   // default opacity
@@ -1750,21 +1750,25 @@ async function toggleCloudLayer(show){
     // ── HOSTED MODE: Live RainViewer satellite infrared tiles ──
     try{
       const r = await fetch('https://api.rainviewer.com/public/weather-maps.json',
-        {signal:AbortSignal.timeout(5000)});
+        {signal:AbortSignal.timeout(8000)});
       if(!r.ok) throw new Error('RainViewer API error');
       const d = await r.json();
-      const infrared = d.satellite?.infrared;
+      // Support both v2 (satellite.infrared) and v3 (radar.past) response shapes
+      const infrared = d.satellite?.infrared || d.radar?.past;
       if(infrared && infrared.length){
         const path = infrared[infrared.length-1].path;
-        cloudLayer = L.tileLayer(
-          `https://tilecache.rainviewer.com${path}/256/{z}/{x}/{y}/2/1_1.png`,
+        // Try both tile URL formats — v2 uses /256/ prefix, v3 embeds size in path
+        const tileUrl = path.includes('/256/')
+          ? `https://tilecache.rainviewer.com${path}/{z}/{x}/{y}/2/1_1.png`
+          : `https://tilecache.rainviewer.com${path}/256/{z}/{x}/{y}/2/1_1.png`;
+        cloudLayer = L.tileLayer(tileUrl,
           {opacity:0.55, zIndex:300, attribution:'© RainViewer'}
         ).addTo(ncMap);
         showToast('🌤 Live cloud satellite loaded');
         return;
       }
-    }catch(e){}
-    showToast('⚠ Cloud satellite unavailable','#f97316');
+    }catch(e){ console.warn('RainViewer:', e); }
+    showToast('⚠ Cloud satellite unavailable — RainViewer free tier','#f97316');
     document.getElementById('btnClouds').classList.remove('on');
     layers.clouds = false;
 
@@ -2553,7 +2557,10 @@ function renderKp(data){
     document.getElementById('lastUpd').textContent = i18n('noaa-unreachable');
     document.getElementById('lastUpd').style.color = '#f97316';
   } else {
-    const ts  = new Date(data.time).toLocaleTimeString(currentLang,{hour:'2-digit',minute:'2-digit'});
+    // Normalise time string — replace space separator with T for cross-browser ISO 8601
+    const rawTime = (data.time||'').replace(' ','T');
+    const dateObj = rawTime ? new Date(rawTime) : null;
+    const ts = (dateObj && !isNaN(dateObj)) ? dateObj.toLocaleTimeString(currentLang,{hour:'2-digit',minute:'2-digit'}) : '—';
     const obs = data.observed ? 'observed' : 'estimated';
     document.getElementById('lastUpd').textContent = `${ts} UTC · ${obs}`;
     document.getElementById('lastUpd').style.color = '';
@@ -2686,7 +2693,7 @@ function skyColour(darkSkyStr){
 function renderCondsSync(loc, kp){
   const el=document.getElementById('alocName');
   if(el) el.textContent=loc.name.split(',')[0];
-  const score=visScore(kp||2,loc);
+  const score=visScore(kp!=null?kp:currentKp??2,loc);
   const col=score>65?'var(--green)':score>35?'var(--kp-mid)':'#ef4444';
   document.getElementById('visPct').textContent=score+'%';
   document.getElementById('visPct').style.color=col;
@@ -2711,7 +2718,7 @@ function renderCondsSync(loc, kp){
 
 async function loadAndRenderConds(loc, kp){
   // Update score ring with latest kp
-  const score=visScore(kp||2,loc);
+  const score=visScore(kp!=null?kp:currentKp??2,loc);
   const col=score>65?'var(--green)':score>35?'var(--kp-mid)':'#ef4444';
   document.getElementById('visPct').textContent=score+'%';
   document.getElementById('visPct').style.color=col;
@@ -3398,7 +3405,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.73';
+  document.title = ORIG_TITLE || 'NightCompass v0.74';
   kpAlertActive = false;
 }
 
@@ -3661,10 +3668,26 @@ async function loadAndRenderActivity(){
       loadSW(), loadIMF(), loadAlerts(),
     ]);
 
-    // Build chart rows from cachedFc (merged history+forecast from init)
-    const kpRows = cachedFc?.length
-      ? cachedFc.map(r=>({kp:r.kp||0, time:r.time}))
-      : lastKpData ? [{kp:lastKpData.kp, time:lastKpData.time}] : [];
+    // 27-day chart: try kp_history.json (GitHub Actions cache, full day 1m data)
+    // then fall back to cachedFc (48h merged history+forecast)
+    let kpRows = [];
+    try{
+      const r = await fetch(NC_DATA+'kp_history.json', {cache:'no-store', signal:AbortSignal.timeout(4000)});
+      if(r.ok){
+        const d = await r.json();
+        if(Array.isArray(d) && d.length){
+          // Sample every 60 entries (1 per hour from 1-minute data) for chart performance
+          const sampled = d.filter((_,i)=>i%60===0);
+          kpRows = sampled.map(r=>({kp:parseFloat(r.kp)||0, time:r.time_tag||r.time}));
+        }
+      }
+    }catch(e){}
+    // Fall back to cachedFc if history unavailable
+    if(!kpRows.length){
+      kpRows = cachedFc?.length
+        ? cachedFc.map(r=>({kp:r.kp||0, time:r.time}))
+        : lastKpData ? [{kp:lastKpData.kp, time:lastKpData.time}] : [];
+    }
 
     if(!kpRows.length){
       const barsEl = document.getElementById('actGeoBars');
@@ -4630,7 +4653,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.73</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.74</div>
   </div>
 </div>
 </body>
