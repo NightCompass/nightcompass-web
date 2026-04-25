@@ -36,22 +36,25 @@ jobs:
 
           echo "▶ Fetching NOAA data at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
-          # ── Current Kp (1-hour geospace) ──────────────────────────────────
+          # ── Current Kp ────────────────────────────────────────────────────
+          # NOTE: geospace_pred_est_kp_1_hour.json appears frozen (NOAA issue).
+          # Using noaa-planetary-k-index-forecast.json instead — it has current
+          # observed + estimated Kp values with up-to-date timestamps.
           curl -sf --max-time 15 \
-            "https://services.swpc.noaa.gov/json/geospace/geospace_pred_est_kp_1_hour.json" \
+            "https://services.swpc.noaa.gov/products/noaa-planetary-k-index-forecast.json" \
             -o /tmp/kp_raw.json || true
           python3 - << 'PY'
           import json
           try:
               with open('/tmp/kp_raw.json') as f:
                   d = json.load(f)
-              last = d[-1]
-              val = last.get('estimated_kp') or last.get('kp_index') or last.get('kp', 0)
-              try:
-                  val = float(val)
-              except:
-                  val = float(''.join(c for c in str(val) if c.isdigit() or c == '.') or 0)
-              out = {"kp": round(val, 2), "time": last.get("time_tag", ""), "source": "geospace_pred_est_kp_1_hour"}
+              # Forecast endpoint returns objects: {time_tag, kp, observed, noaa_scale}
+              # Find the last observed/estimated entry (most recent real Kp)
+              observed = [r for r in d if isinstance(r, dict) and r.get('observed') in ('observed','estimated')]
+              last = observed[-1] if observed else d[-1]
+              val  = float(last.get('kp', last.get('k', last.get('estimated_kp', 0))))
+              time = last.get('time_tag', last.get('model_prediction_time', ''))
+              out = {"kp": round(val, 2), "time": time, "source": "noaa-planetary-k-index-forecast"}
               with open('data/kp.json', 'w') as f:
                   json.dump(out, f)
               print(f"✓ kp.json: Kp {out['kp']} at {out['time']}")
@@ -97,10 +100,23 @@ jobs:
               with open('/tmp/fc_raw.json') as f:
                   d = json.load(f)
               out = []
-              rows = d[1:] if (d and isinstance(d[0], list) and isinstance(d[0][1], str)) else d
-              for r in rows:
+              # NOAA changed format: now returns array of objects {time_tag, kp, observed, noaa_scale}
+              # Old format was 2D array with header row — handle both for resilience.
+              for r in d:
                   try:
-                      out.append({"time_tag": r[0], "kp": round(float(r[1]), 2)})
+                      if isinstance(r, dict):
+                          # New format: object with named keys
+                          time = r.get("time_tag", "")
+                          val  = float(r.get("kp", 0))
+                          obs  = r.get("observed", "")
+                      elif isinstance(r, list) and len(r) >= 2 and r[0] != "time_tag":
+                          # Old format: [time_tag, kp, observed]
+                          time = r[0]
+                          val  = float(r[1])
+                          obs  = r[2] if len(r) > 2 else ""
+                      else:
+                          continue  # skip header rows
+                      out.append({"time_tag": time, "kp": round(val, 2), "observed": obs})
                   except:
                       pass
               with open('data/kp_forecast.json', 'w') as f:
