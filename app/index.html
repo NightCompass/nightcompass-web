@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="frame-ancestors 'none';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.81</title>
+<title>NightCompass v0.82</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -556,7 +557,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.81</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.82</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1239,7 +1240,7 @@ function resetStaleTimer(){
 //   Removed:  corsproxy.io, cors.sh, codetabs, allorigins, thingproxy (all AV-risk)
 //
 // ⚠ DEPLOY STEP: replace NC_WORKER_URL with your actual Worker URL after deployment.
-//   Format: https://nightcompass-noaa-proxy.YOUR-SUBDOMAIN.workers.dev
+//   Deployed at: https://nightcompass-noaa-proxy.nightcompass.workers.dev
 //   Until deployed, the Worker path is skipped gracefully — NC_DATA cache is the primary.
 const NC_WORKER_URL = 'https://nightcompass-noaa-proxy.nightcompass.workers.dev';  // ← replace after Cloudflare Worker setup
 
@@ -2076,7 +2077,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.77 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.81 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2570,7 +2571,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.77 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.81 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -2887,7 +2888,8 @@ function renderAlerts(alerts, containerId='alertsArea'){
     if(pid==='ALTSW')  return {title:'Solar Wind Alert', col:'#facc15'};
     if(pid==='ALTPC1') return {title:'Polar Cap Absorption Event', col:'#f97316'};
     // Catch-all — show cleaned code but don't show garbage
-    return {title:`Space Weather Notice — ${pid}`, col:'var(--muted)'};
+    const safePid=(pid||'').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return {title:`Space Weather Notice — ${safePid}`, col:'var(--muted)'};
   };
 
   // Parse NOAA fixed-format message body — skip teletype header lines
@@ -3487,7 +3489,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.81';
+  document.title = ORIG_TITLE || 'NightCompass v0.82';
   kpAlertActive = false;
 }
 
@@ -4770,7 +4772,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.81</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.82</div>
   </div>
 </div>
 </body>
