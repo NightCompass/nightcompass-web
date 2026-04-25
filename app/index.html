@@ -1234,8 +1234,9 @@ function resetStaleTimer(){
 //   1. Direct fetch — works when NOAA sends CORS headers (most /json/ endpoints)
 //   2. corsproxy.io  — transparent open-source proxy, no registration required
 //   3. cors.sh       — simple maintained proxy, different infrastructure = diversity
-//   4. api.codetabs.com — reliable public CORS proxy, no AV flags
-// Removed: allorigins.win (AV-flagged), thingproxy (unreliable)
+// Removed: allorigins.win (AV-flagged), thingproxy (unreliable), codetabs (AV-flagged)
+// Policy: no public CORS proxy is added without explicit AV vetting.
+// Primary data path is always same-origin NC_DATA (GitHub Actions cache).
 async function noaaFetch(path, timeout=8000){
   const url='https://services.swpc.noaa.gov'+path;
   // 1. Direct — NOAA /json/ endpoints send Access-Control-Allow-Origin: *
@@ -1244,19 +1245,13 @@ async function noaaFetch(path, timeout=8000){
     const r=await fetch(url,{cache:'no-store',signal:AbortSignal.timeout(10000)});
     if(r.ok){ const d=await r.json(); if(d&&(Array.isArray(d)?d.length:true)) return d; }
   }catch(e){}
-  // 2. corsproxy.io — well-maintained, open source, no AV flags
+  // 2. corsproxy.io — open source, self-hostable, consistent AV record
   try{
     const proxy=`https://corsproxy.io/?${encodeURIComponent(url)}`;
     const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
     if(r.ok){ const d=await r.json(); if(d) return d; }
   }catch(e){}
-  // 3. api.codetabs.com — reliable public proxy, independent infrastructure
-  try{
-    const proxy=`https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-    const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout)});
-    if(r.ok){ const d=await r.json(); if(d) return d; }
-  }catch(e){}
-  // 4. cors.sh — independent infrastructure, clean AV record
+  // 3. cors.sh — independent infrastructure, consistent AV record
   try{
     const proxy=`https://cors.sh/${url}`;
     const r=await fetch(proxy,{cache:'no-store',signal:AbortSignal.timeout(timeout),
@@ -4636,7 +4631,7 @@ function refreshDiag(){
       diagItem('NOAA status', noaaOk ? lastUpd.substring(0,25) : 'UNREACHABLE', noaaOk?'ok':'err') +
       diagItem('Kp forecast bars', fcOk2 ? 'rendered' : 'failed/retrying', fcOk2?'ok':'warn') +
       diagItem('Active alerts', alertPill, alertPill.includes('0')?'idle':'ok') +
-      diagItem('CORS proxy chain', '→ codetabs → cors.sh', 'idle') +
+      diagItem('CORS proxy chain', 'corsproxy.io → cors.sh', 'idle') +
       diagItem('NC_DATA cache', cachedFc?.length ? `${cachedFc.length} rows` : 'miss — check /data/', cachedFc?.length?'ok':'err');
   }
 
