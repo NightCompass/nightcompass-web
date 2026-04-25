@@ -1,0 +1,131 @@
+name: Fetch NOAA Space Weather Data
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Fetch NOAA endpoints
+        run: |
+          mkdir -p data
+
+          # ── Current Kp ──
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/json/geospace/geospace_pred_est_kp_1_hour.json" \
+            -o /tmp/kp_raw.json || true
+          python3 - << 'PY'
+          import json, os
+          try:
+              with open('/tmp/kp_raw.json') as f:
+                  d = json.load(f)
+              last = d[-1]
+              val = last.get('estimated_kp') or last.get('kp_index') or last.get('kp', 0)
+              try:
+                  val = float(val)
+              except:
+                  val = float(''.join(c for c in str(val) if c.isdigit() or c == '.') or 0)
+              out = {"kp": round(val, 2), "time": last.get("time_tag", ""), "source": "geospace_pred_est_kp_1_hour"}
+              with open('data/kp.json', 'w') as f:
+                  json.dump(out, f)
+              print(f"Kp: {out['kp']} at {out['time']}")
+          except Exception as e:
+              print(f"kp.json failed: {e}")
+          PY
+
+          # ── Kp history — planetary_k_index_1m.json (confirmed working) ──
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/json/planetary_k_index_1m.json" \
+            -o /tmp/kp1m_raw.json || true
+          python3 - << 'PY'
+          import json
+          try:
+              with open('/tmp/kp1m_raw.json') as f:
+                  d = json.load(f)
+              # Strip header row if present
+              raw = d[1:] if (len(d) > 0 and isinstance(d[0], list) and not isinstance(d[0][1], float)) else d
+              out = []
+              for r in raw:
+                  try:
+                      out.append({"time_tag": r[0], "kp": round(float(r[1]), 2)})
+                  except:
+                      pass
+              with open('data/kp_history.json', 'w') as f:
+                  json.dump(out, f)
+              print(f"History: {len(out)} rows")
+          except Exception as e:
+              print(f"kp_history.json failed: {e}")
+          PY
+
+          # ── Kp forecast (45-day) ──
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/json/45-day-forecast.json" \
+            -o /tmp/fc_raw.json || true
+          python3 - << 'PY'
+          import json
+          try:
+              with open('/tmp/fc_raw.json') as f:
+                  d = json.load(f)
+              out = []
+              for r in d:
+                  if isinstance(r, dict):
+                      val = float(r.get('kp', 0) or 0)
+                      time = r.get('time_tag', '')
+                  elif isinstance(r, list) and len(r) >= 2:
+                      time, val = r[0], float(r[1] or 0)
+                  else:
+                      continue
+                  out.append({"time_tag": time, "kp": round(val, 2)})
+              with open('data/kp_forecast.json', 'w') as f:
+                  json.dump(out, f)
+              print(f"Forecast: {len(out)} rows")
+          except Exception as e:
+              print(f"kp_forecast.json failed: {e}")
+          PY
+
+          # ── Solar wind plasma ──
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/products/solar-wind/plasma-2-hour.json" \
+            -o data/solar_wind_plasma.json || true
+
+          # ── Solar wind mag (IMF) ──
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/products/solar-wind/mag-2-hour.json" \
+            -o data/solar_wind_mag.json || true
+
+          # ── Active alerts ──
+          curl -sf --max-time 15 \
+            "https://services.swpc.noaa.gov/products/alerts.json" \
+            -o data/alerts.json || true
+
+          # ── Timestamp ──
+          python3 -c "
+          import json
+          from datetime import datetime, timezone
+          with open('data/meta.json','w') as f:
+              json.dump({'fetched_utc': datetime.now(timezone.utc).isoformat(), 'source': 'NOAA SWPC'}, f)
+          "
+
+          echo "=== data/ contents ==="
+          ls -lh data/
+
+      - name: Commit and push data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet && echo "No changes" || \
+            git commit -m "chore: NOAA data update $(date -u '+%Y-%m-%dT%H:%M:%SZ')" && \
+            git push
