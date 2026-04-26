@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.95</title>
+<title>NightCompass v0.96</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.95</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.96</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1716,9 +1716,8 @@ function probToRGBA(p, bands){
 const AuroraLayer = L.Layer.extend({
   _kp: 3,
   _ovation: null,
-  _bitmap: null,       // current ImageBitmap
-  _bitmapOrigin: null, // map.getPixelOrigin() when bitmap was rendered
-  _renderSeq: 0,       // cancels stale worker responses
+  _bitmap: null,
+  _renderSeq: 0,
   initialize(kp){ this._kp=kp; },
   onAdd(map){
     this._map=map;
@@ -1726,40 +1725,17 @@ const AuroraLayer = L.Layer.extend({
     this._canvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;';
     map.getPanes().overlayPane.appendChild(this._canvas);
     this._size={x:0,y:0};
-    map.on('move',    this._onMove,    this);
-    map.on('moveend', this._onMoveEnd, this);
-    map.on('zoomend resize', this._scheduleRender, this);
+    map.on('moveend zoomend resize', this._scheduleRender, this);
     this._scheduleRender();
     setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.85'; },80);
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
-    map.off('move',    this._onMove,    this);
-    map.off('moveend', this._onMoveEnd, this);
-    map.off('zoomend resize', this._scheduleRender, this);
-    this._renderSeq++; // cancel any in-flight worker render
+    map.off('moveend zoomend resize', this._scheduleRender, this);
+    this._renderSeq++;
   },
-  setKp(kp){ this._kp=kp; this._ovation=null; this._bitmap=null; this._scheduleRender(); },
-  setOvation(data){ this._ovation=data; this._bitmap=null; this._scheduleRender(); },
-
-  // During drag: reposition canvas via CSS — zero JS repaint work.
-  _onMove(){
-    if(!this._canvas||!this._map||!this._bitmapOrigin) return;
-    const origin = this._map.getPixelOrigin();
-    const dx = this._bitmapOrigin.x - origin.x;
-    const dy = this._bitmapOrigin.y - origin.y;
-    L.DomUtil.setPosition(this._canvas,
-      this._map.containerPointToLayerPoint([0,0]).add(L.point(dx,dy)));
-  },
-  // Pan end: snap back and re-render at new position.
-  _onMoveEnd(){
-    if(!this._canvas||!this._map) return;
-    const size = this._map.getSize();
-    if(size.x !== this._size.x || size.y !== this._size.y){
-      this._scheduleRender(); return;
-    }
-    this._scheduleRender();
-  },
+  setKp(kp){ this._kp=kp; this._ovation=null; this._scheduleRender(); },
+  setOvation(data){ this._ovation=data; this._scheduleRender(); },
   _scheduleRender(){
     if(!this._map) return;
     const map  = this._map;
@@ -1767,11 +1743,10 @@ const AuroraLayer = L.Layer.extend({
     if(!size.x||!size.y) return;
     this._size = {x:size.x, y:size.y};
 
-    // World pixel origin of the top-left screen corner
-    const origin = map.getPixelOrigin();
-    const layerPt = map.containerPointToLayerPoint([0,0]);
-    const originX = origin.x + layerPt.x;
-    const originY = origin.y + layerPt.y;
+    const topLeft = map.containerPointToLayerPoint([0,0]);
+    const origin  = map.getPixelOrigin();
+    const originX = origin.x - topLeft.x;
+    const originY = origin.y - topLeft.y;
     const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
 
     const seq = ++this._renderSeq;
@@ -1784,16 +1759,12 @@ const AuroraLayer = L.Layer.extend({
       bands: getAuroraPalette(),
       ovation: this._ovation ? this._ovation.coordinates : null,
     }).then(bitmap => {
-      if(seq !== this._renderSeq || !this._canvas) return; // stale
+      if(seq !== this._renderSeq || !this._canvas) return;
       this._bitmap = bitmap;
-      this._bitmapOrigin = map.getPixelOrigin();
-      // Resize canvas if needed, snap position, draw bitmap
-      if(this._canvas.width !== size.x) this._canvas.width = size.x;
+      if(this._canvas.width  !== size.x) this._canvas.width  = size.x;
       if(this._canvas.height !== size.y) this._canvas.height = size.y;
       L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-      const ctx = this._canvas.getContext('2d');
-      ctx.clearRect(0,0,size.x,size.y);
-      ctx.drawImage(bitmap,0,0);
+      this._canvas.getContext('2d').drawImage(bitmap, 0, 0);
     });
   },
 });
@@ -2058,12 +2029,10 @@ function solarElevAngle(latDeg, lonDeg, sunLat, sunLon){
 }
 
 // ── DAY / NIGHT — Worker-based canvas layer ───────────────────────────────────
-// Worker renders off main thread. During drag: canvas repositioned via CSS only.
-// Re-renders when pan > 80px from last render origin, or on zoom/timer.
+// Worker renders off main thread. Leaflet's overlay pane CSS transform handles
+// pan fluidity natively — canvas just needs correct position on moveend/zoomend.
 const DayNightLayer = L.Layer.extend({
   _date: null,
-  _bitmap: null,
-  _bitmapOrigin: null,  // map.getPixelOrigin() when bitmap was rendered
   _renderSeq: 0,
   initialize(date){ this._date = date || new Date(); },
   onAdd(map){
@@ -2072,42 +2041,15 @@ const DayNightLayer = L.Layer.extend({
     this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
     map.getPanes().overlayPane.appendChild(this._canvas);
     this._size={x:0,y:0};
-    map.on('move',    this._onMove,    this);
-    map.on('moveend', this._onMoveEnd, this);
-    map.on('zoomend resize', this._scheduleRender, this);
+    map.on('moveend zoomend resize', this._scheduleRender, this);
     this._scheduleRender();
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
-    map.off('move',    this._onMove,    this);
-    map.off('moveend', this._onMoveEnd, this);
-    map.off('zoomend resize', this._scheduleRender, this);
+    map.off('moveend zoomend resize', this._scheduleRender, this);
     this._renderSeq++;
   },
   setDate(date){ this._date = date; this._scheduleRender(); },
-  // During drag: CSS reposition only — zero repaint.
-  _onMove(){
-    if(!this._canvas||!this._map||!this._bitmapOrigin) return;
-    const origin = this._map.getPixelOrigin();
-    const dx = this._bitmapOrigin.x - origin.x;
-    const dy = this._bitmapOrigin.y - origin.y;
-    L.DomUtil.setPosition(this._canvas,
-      this._map.containerPointToLayerPoint([0,0]).add(L.point(dx,dy)));
-  },
-  // Pan end: re-render only if moved > 80px from last render origin.
-  _onMoveEnd(){
-    if(!this._map) return;
-    const size = this._map.getSize();
-    if(size.x !== this._size.x || size.y !== this._size.y){
-      this._scheduleRender(); return;
-    }
-    if(!this._bitmapOrigin) { this._scheduleRender(); return; }
-    const origin = this._map.getPixelOrigin();
-    const dx = Math.abs(this._bitmapOrigin.x - origin.x);
-    const dy = Math.abs(this._bitmapOrigin.y - origin.y);
-    if(dx > 80 || dy > 80) this._scheduleRender();
-    // else: existing bitmap still good enough — don't re-render
-  },
   _scheduleRender(){
     if(!this._map) return;
     const map  = this._map;
@@ -2115,10 +2057,10 @@ const DayNightLayer = L.Layer.extend({
     if(!size.x||!size.y) return;
     this._size = {x:size.x, y:size.y};
 
-    const origin = map.getPixelOrigin();
-    const layerPt = map.containerPointToLayerPoint([0,0]);
-    const originX = origin.x + layerPt.x;
-    const originY = origin.y + layerPt.y;
+    const topLeft = map.containerPointToLayerPoint([0,0]);
+    const origin  = map.getPixelOrigin();
+    const originX = origin.x - topLeft.x;
+    const originY = origin.y - topLeft.y;
     const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
     const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
 
@@ -2130,14 +2072,10 @@ const DayNightLayer = L.Layer.extend({
       sunLat, sunLon,
     }).then(bitmap => {
       if(seq !== this._renderSeq || !this._canvas) return;
-      this._bitmap = bitmap;
-      this._bitmapOrigin = map.getPixelOrigin();
       if(this._canvas.width  !== size.x) this._canvas.width  = size.x;
       if(this._canvas.height !== size.y) this._canvas.height = size.y;
       L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-      const ctx = this._canvas.getContext('2d');
-      ctx.clearRect(0,0,size.x,size.y);
-      ctx.drawImage(bitmap,0,0);
+      this._canvas.getContext('2d').drawImage(bitmap, 0, 0);
     });
   },
 });
@@ -2176,7 +2114,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.95 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.96 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2572,7 +2510,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.95 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.96 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -3558,7 +3496,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.95';
+  document.title = ORIG_TITLE || 'NightCompass v0.96';
   kpAlertActive = false;
 }
 
@@ -4843,7 +4781,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.95</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.96</div>
   </div>
 </div>
 </body>
