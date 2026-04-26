@@ -33,7 +33,6 @@ jobs:
         run: |
           python3 - << 'PY'
           import os, hmac, hashlib, datetime, urllib.request, urllib.parse
-          import xml.etree.ElementTree as ET, base64
 
           R2_KEY     = os.environ['R2_ACCESS_KEY_ID']
           R2_SECRET  = os.environ['R2_SECRET_ACCESS_KEY']
@@ -79,34 +78,54 @@ jobs:
               if not keys: return 0
               objs = ''.join(f'<Object><Key>{k}</Key></Object>' for k in keys)
               body = f'<?xml version="1.0"?><Delete><Quiet>true</Quiet>{objs}</Delete>'.encode()
-              md5  = base64.b64encode(hashlib.md5(body).digest()).decode()
-              extra = {'content-md5': md5, 'content-type': 'application/xml'}
+              extra = {'content-type': 'application/xml'}
               hdrs  = aws_headers('POST', f'/{R2_BUCKET}', 'delete=', body, extra)
               req   = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?delete=',
                                              data=body, method='POST', headers=hdrs)
               with urllib.request.urlopen(req) as r: r.read()
               return len(keys)
 
+          def delete_keys(keys):
+              if not keys: return 0
+              objs = ''.join(f'<Object><Key>{k}</Key></Object>' for k in keys)
+              body = f'<?xml version="1.0"?><Delete><Quiet>true</Quiet>{objs}</Delete>'.encode()
+              extra = {'content-type': 'application/xml'}
+              hdrs  = aws_headers('POST', f'/{R2_BUCKET}', 'delete=', body, extra)
+              req   = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?delete=',
+                                             data=body, method='POST', headers=hdrs)
+              try:
+                  with urllib.request.urlopen(req) as r:
+                      resp = r.read()
+              except urllib.error.HTTPError as e:
+                  print(f'  Delete HTTP error {e.code}: {e.read().decode()[:200]}')
+                  raise
+              return len(keys)
+
           print(f'Scanning {R2_BUCKET}/{PREFIX} ...')
-          # First pass: count objects
-          total_found = 0; token = None
-          while True:
-              keys, token = list_keys(PREFIX, token)
-              total_found += len(keys)
-              if not token: break
-          print(f'Found {total_found:,} objects to delete')
+          try:
+              # First pass: count objects
+              total_found = 0; token = None
+              while True:
+                  keys, token = list_keys(PREFIX, token)
+                  total_found += len(keys)
+                  if not token: break
+              print(f'Found {total_found:,} objects to delete')
 
-          # Second pass: delete
-          total_deleted = 0; token = None
-          while True:
-              keys, token = list_keys(PREFIX, token)
-              if keys:
-                  total_deleted += delete_keys(keys)
-                  print(f'  Deleted {total_deleted:,} / {total_found:,}...')
-              if not token: break
-
-          print(f'\n✓ Done — {total_deleted:,} objects deleted from {R2_BUCKET}/{PREFIX}')
-          PY
+              if total_found == 0:
+                  print('✓ Nothing to delete — bucket already empty')
+              else:
+                  # Second pass: delete
+                  total_deleted = 0; token = None
+                  while True:
+                      keys, token = list_keys(PREFIX, token)
+                      if keys:
+                          total_deleted += delete_keys(keys)
+                          print(f'  Deleted {total_deleted:,} / {total_found:,}...')
+                      if not token: break
+                  print(f'\n✓ Done — {total_deleted:,} objects deleted from {R2_BUCKET}/{PREFIX}')
+          except Exception as e:
+              print(f'✗ Error: {e}')
+              raise
 
   skip:
     name: "Skipped — confirm field was not DELETE"
