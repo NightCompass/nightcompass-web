@@ -164,15 +164,21 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  dl_req  = urllib.request.Request(dl_url)
-                  dl_req.add_header('Authorization', f'Bearer {NASA_TOKEN}')
+                  # Use curl with -L (follow redirects) and -b session (forward cookies)
+                  # urllib.request does not handle LAADS OAuth redirects correctly
+                  import subprocess
                   try:
-                      with urllib.request.urlopen(dl_req, timeout=180) as r, \
-                           open(h5_path,'wb') as f: f.write(r.read())
+                      result = subprocess.run([
+                          'curl', '--fail', '-sS', '-L', '-b', 'session',
+                          '-H', f'Authorization: Bearer {NASA_TOKEN}',
+                          '-o', str(h5_path), dl_url
+                      ], capture_output=True, timeout=300)
+                      if result.returncode != 0:
+                          raise RuntimeError(result.stderr.decode().strip())
                       print(f'  ↓ {tile_id}: {h5_path.stat().st_size/1024/1024:.1f} MB')
                   except Exception as e:
                       print(f'  ✗ {tile_id} download: {e}')
-                      failed+=1; continue
+                      h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   try:
                       with h5py.File(h5_path,'r') as hf:
@@ -385,15 +391,21 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  dl_req  = urllib.request.Request(dl_url)
-                  dl_req.add_header('Authorization', f'Bearer {NASA_TOKEN}')
+                  # Use curl with -L (follow redirects) and -b session (forward cookies)
+                  # urllib.request does not handle LAADS OAuth redirects correctly
+                  import subprocess
                   try:
-                      with urllib.request.urlopen(dl_req, timeout=180) as r, \
-                           open(h5_path,'wb') as f: f.write(r.read())
+                      result = subprocess.run([
+                          'curl', '--fail', '-sS', '-L', '-b', 'session',
+                          '-H', f'Authorization: Bearer {NASA_TOKEN}',
+                          '-o', str(h5_path), dl_url
+                      ], capture_output=True, timeout=300)
+                      if result.returncode != 0:
+                          raise RuntimeError(result.stderr.decode().strip())
                       print(f'  ↓ {tile_id}: {h5_path.stat().st_size/1024/1024:.1f} MB')
                   except Exception as e:
                       print(f'  ✗ {tile_id} download: {e}')
-                      failed+=1; continue
+                      h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   try:
                       with h5py.File(h5_path,'r') as hf:
