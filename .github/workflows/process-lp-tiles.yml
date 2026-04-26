@@ -82,9 +82,10 @@ jobs:
               return hdrs
 
           def list_keys(prefix, token=None):
-              params = {'list-type':'2','prefix':prefix,'max-keys':'1000'}
+              params = {'list-type':'2','max-keys':'1000','prefix':prefix}
               if token: params['continuation-token'] = token
-              q = urllib.parse.urlencode(params)
+              q = '&'.join(f'{urllib.parse.quote(k,safe="")}={urllib.parse.quote(str(v),safe="")}'
+                           for k,v in sorted(params.items()))
               hdrs = aws_headers('GET', f'/{R2_BUCKET}', q)
               req  = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?{q}', headers=hdrs)
               with urllib.request.urlopen(req) as r: root = ET.fromstring(r.read())
@@ -97,11 +98,10 @@ jobs:
               if not keys: return 0
               objs = ''.join(f'<Object><Key>{k}</Key></Object>' for k in keys)
               body = f'<?xml version="1.0"?><Delete><Quiet>true</Quiet>{objs}</Delete>'.encode()
-              md5  = base64.b64encode(hashlib.md5(body).digest()).decode()
-              extra = {'content-md5': md5, 'content-type': 'application/xml'}
-              hdrs = aws_headers('POST', f'/{R2_BUCKET}', 'delete=', body, extra)
-              req  = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?delete=',
-                                            data=body, method='POST', headers=hdrs)
+              extra = {'content-type': 'application/xml'}
+              hdrs  = aws_headers('POST', f'/{R2_BUCKET}', 'delete=', body, extra)
+              req   = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?delete=',
+                                             data=body, method='POST', headers=hdrs)
               with urllib.request.urlopen(req) as r: r.read()
               return len(keys)
 
