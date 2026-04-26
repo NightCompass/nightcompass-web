@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.94</title>
+<title>NightCompass v0.95</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.94</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.95</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1503,9 +1503,170 @@ async function loadWeather(lat, lon){
   return d;
 }
 
-// ── AURORA HEATMAP — seamless canvas Leaflet layer ────────────────────────────
-// Uses a custom Leaflet Layer that renders directly to a canvas element
-// that repositions on every map move — zero tile seams, always correct.
+// ── SHARED OVERLAY WORKER ─────────────────────────────────────────────────────
+// Single Web Worker handles both Aurora and Day/Night rendering off main thread.
+// Receives projection params + data, returns ImageBitmap via transferable.
+// Main thread never blocks — swap bitmap on canvas when worker responds.
+
+const _overlayWorkerSrc = `
+// ── Shared math (duplicated from main thread — workers have no DOM access) ──
+function geomLat(lat,lon){
+  const φ=lat*Math.PI/180,λ=lon*Math.PI/180;
+  const φp=80.65*Math.PI/180,λp=-72.68*Math.PI/180;
+  return Math.asin(Math.max(-1,Math.min(1,
+    Math.sin(φ)*Math.sin(φp)+Math.cos(φ)*Math.cos(φp)*Math.cos(λ-λp)
+  )))*180/Math.PI;
+}
+function auroraProb(gLat,kp){
+  const absLat=Math.abs(gLat);
+  const centre=67.5-kp*2.2, width=3.0+kp*0.7;
+  const dist=Math.abs(absLat-centre);
+  if(dist>width*3.8) return 0;
+  return Math.round(Math.exp(-0.5*(dist/width)**2)*Math.min(100,kp*13+6));
+}
+function probToRGBA(p,bands){
+  if(p<bands[0][0]) return null;
+  let band=bands[0];
+  for(const b of bands){ if(p>=b[0]) band=b; }
+  return band;
+}
+// Mercator inverse: pixel (px,py) in a W×H canvas → {lat,lon}
+// origin: top-left tile in world pixels at this zoom, scale: worldPx/360
+function mercatorInv(px,py,W,H,originX,originY,scale){
+  const wx=originX+px, wy=originY+py;
+  const lon=wx/scale-180;
+  const n=Math.PI-(2*Math.PI*wy)/(scale*H/H); // normalised
+  // wy in world pixels: lat from Mercator
+  const latRad=Math.atan(Math.sinh(Math.PI*(1-2*wy/(scale*(256/256)))));
+  return {lat:latRad*180/Math.PI, lon};
+}
+
+// Full Mercator inverse using raw world pixel coords
+function pxToLatLon(wx,wy,worldPx){
+  const lon=wx/worldPx*360-180;
+  const n=Math.PI-2*Math.PI*wy/worldPx;
+  return {lat:Math.atan(Math.sinh(n))*180/Math.PI, lon};
+}
+
+function solarElevAngle(latDeg,lonDeg,sunLat,sunLon){
+  const toR=Math.PI/180;
+  const φ1=latDeg*toR,φ2=sunLat*toR,Δλ=(lonDeg-sunLon)*toR;
+  return Math.asin(Math.sin(φ1)*Math.sin(φ2)+Math.cos(φ1)*Math.cos(φ2)*Math.cos(Δλ))*180/Math.PI;
+}
+
+self.onmessage = function(e){
+  const {id, type, width, height, originX, originY, worldPx, zoom,
+         kp, bands, ovation, sunLat, sunLon} = e.data;
+
+  const buf = new Uint8ClampedArray(width * height * 4);
+  const step = 2; // render at 2px steps, fill 2×2 blocks → 4× speedup
+
+  if(type === 'aurora'){
+    // Build OVATION lookup if available
+    let byLon = null;
+    if(ovation){
+      byLon = {};
+      for(const [lon,lat,prob] of ovation){
+        if(prob < bands[0][0]) continue;
+        const key = Math.round(((lon%360)+360)%360)-180;
+        if(!byLon[key]) byLon[key]=[];
+        byLon[key].push({lat,prob});
+      }
+    }
+    for(let px=0; px<width; px+=step){
+      const wx = originX + px + step/2;
+      const lon_raw = wx/worldPx*360-180;
+      for(let py=0; py<height; py+=step){
+        const wy = originY + py + step/2;
+        const n  = Math.PI - 2*Math.PI*wy/worldPx;
+        const lat = Math.atan(Math.sinh(n))*180/Math.PI;
+        if(lat < -85 || lat > 85) continue;
+
+        let col = null;
+        if(byLon){
+          const lon = Math.round(((lon_raw%360)+360)%360)-180;
+          const entries = byLon[lon];
+          if(entries){
+            let best=null, bestDist=Infinity;
+            for(const en of entries){
+              const d=Math.abs(en.lat-lat);
+              if(d<bestDist){bestDist=d;best=en;}
+            }
+            if(best && bestDist<=1.5 && best.prob>=bands[0][0])
+              col = probToRGBA(best.prob, bands);
+          }
+        } else {
+          const p = auroraProb(geomLat(lat, lon_raw), kp);
+          col = probToRGBA(p, bands);
+        }
+        if(!col) continue;
+
+        // Fill step×step block
+        for(let dx=0; dx<step && px+dx<width; dx++){
+          for(let dy=0; dy<step && py+dy<height; dy++){
+            const i=((py+dy)*width+(px+dx))*4;
+            buf[i]=col[1]; buf[i+1]=col[2]; buf[i+2]=col[3]; buf[i+3]=col[4];
+          }
+        }
+      }
+    }
+  } else if(type === 'daynight'){
+    for(let px=0; px<width; px+=step){
+      const wx = originX + px + step/2;
+      const lon = wx/worldPx*360-180;
+      for(let py=0; py<height; py+=step){
+        const wy = originY + py + step/2;
+        const n  = Math.PI - 2*Math.PI*wy/worldPx;
+        const lat = Math.atan(Math.sinh(n))*180/Math.PI;
+        const elev = solarElevAngle(lat, lon, sunLat, sunLon);
+
+        let alpha=0;
+        if     (elev<=-18) alpha=0.68;
+        else if(elev< -12) alpha=0.58+0.10*(-12-elev)/6;
+        else if(elev<  -6) alpha=0.38+0.20*(-6 -elev)/6;
+        else if(elev<   0) alpha=0.10+0.28*(0  -elev)/6;
+        else if(elev<   3) alpha=0.10*(3-elev)/3;
+        if(alpha<0.01) continue;
+
+        const a=Math.round(alpha*255);
+        for(let dx=0; dx<step && px+dx<width; dx++){
+          for(let dy=0; dy<step && py+dy<height; dy++){
+            const i=((py+dy)*width+(px+dx))*4;
+            buf[i]=15; buf[i+1]=28; buf[i+2]=64; buf[i+3]=a;
+          }
+        }
+      }
+    }
+  }
+
+  const imgData = new ImageData(buf, width, height);
+  createImageBitmap(imgData).then(bmp => {
+    self.postMessage({id, bitmap: bmp}, [bmp]);
+  });
+};
+`;
+
+const _overlayWorker = new Worker(
+  URL.createObjectURL(new Blob([_overlayWorkerSrc], {type:'text/javascript'}))
+);
+let _workerCallbacks = {};
+let _workerSeq = 0;
+_overlayWorker.onmessage = e => {
+  const cb = _workerCallbacks[e.data.id];
+  if(cb){ delete _workerCallbacks[e.data.id]; cb(e.data.bitmap); }
+};
+function _workerRender(params){
+  return new Promise(resolve => {
+    const id = ++_workerSeq;
+    _workerCallbacks[id] = resolve;
+    _overlayWorker.postMessage({...params, id});
+  });
+}
+
+// ── AURORA HEATMAP ────────────────────────────────────────────────────────────
+// Canvas layer. During pan: canvas is repositioned via CSS transform (zero repaint).
+// After pan/zoom: worker renders new bitmap off main thread, swapped in when ready.
+// Aurora oval is position-independent at a given zoom → bitmap cached per zoom.
 
 function geomLat(lat, lon){
   const φ=lat*Math.PI/180, λ=lon*Math.PI/180;
@@ -1517,65 +1678,47 @@ function geomLat(lat, lon){
 
 function auroraProb(gLat, kp){
   const absLat=Math.abs(gLat);
-  // Oval centre moves equatorward ~2.2° per Kp unit — very dramatic at high Kp
   const centre = 67.5 - kp*2.2;
-  // Width also increases so the band widens at higher activity
   const width  = 3.0 + kp*0.7;
   const dist   = Math.abs(absLat - centre);
   if(dist > width*3.8) return 0;
   const raw = Math.exp(-0.5*(dist/width)**2);
-  // Max brightness scales with Kp — at Kp 1 it's faint, at Kp 8 it's vivid
   return Math.round(raw * Math.min(100, kp*13 + 6));
 }
 
-// Aurora colour — 4 hard-edged bands matching "My Aurora Forecast" style
-// Each band has a distinct colour so low/med/high are immediately readable
 function getAuroraPalette(){
   const a11y = document.body.getAttribute('data-a11y')||'none';
-  // Each entry: [minProb, r, g, b, alpha]
   if(a11y==='deuteranopia') return [
-    [2,  60, 65, 70, 100],
-    [10,  0, 70, 180, 150],
-    [25,  0,140, 255, 190],
-    [50, 100,200, 255, 210],
-    [75, 255,200,   0, 225],
+    [2,  60, 65, 70, 100],[10,  0, 70, 180, 150],[25,  0,140, 255, 190],
+    [50, 100,200, 255, 210],[75, 255,200,   0, 225],
   ];
   if(a11y==='protanopia') return [
-    [2,  60, 65, 70, 100],
-    [10,  0, 70, 160, 150],
-    [25,  0,130, 255, 190],
-    [50,  60,200, 255, 210],
-    [75, 255,210,   0, 225],
+    [2,  60, 65, 70, 100],[10,  0, 70, 160, 150],[25,  0,130, 255, 190],
+    [50,  60,200, 255, 210],[75, 255,210,   0, 225],
   ];
   if(a11y==='tritanopia') return [
-    [2,  60, 65, 70, 100],
-    [10,  0,110,  70, 150],
-    [25,  0,200, 120, 190],
-    [50,  0,230, 180, 210],
-    [75, 255,150,   0, 225],
+    [2,  60, 65, 70, 100],[10,  0,110,  70, 150],[25,  0,200, 120, 190],
+    [50,  0,230, 180, 210],[75, 255,150,   0, 225],
   ];
-  // Default: visible grey → dark green → vivid green → yellow-orange → red
   return [
-    [2,  100,110,120, 140],  // visible grey-blue    (2–10%)
-    [10,   0,100,  25, 160], // faint dark green      (10–25%)
-    [25,   0,210,  60, 195], // vivid green           (25–50%)
-    [50,  230,180,   0, 215],// yellow-orange         (50–75%)
-    [75,  220,  0,   0, 230],// red                   (75–100%)
+    [2,  100,110,120, 140],[10,   0,100,  25, 160],[25,   0,210,  60, 195],
+    [50,  230,180,   0, 215],[75,  220,  0,   0, 230],
   ];
 }
 
 function probToRGBA(p, bands){
   if(p < bands[0][0]) return null;
-  // Find the highest band this probability qualifies for
   let band = bands[0];
   for(const b of bands){ if(p >= b[0]) band = b; }
   return [band[1], band[2], band[3], band[4]];
 }
 
-// The custom Leaflet layer — redraws on every map change
 const AuroraLayer = L.Layer.extend({
   _kp: 3,
   _ovation: null,
+  _bitmap: null,       // current ImageBitmap
+  _bitmapOrigin: null, // map.getPixelOrigin() when bitmap was rendered
+  _renderSeq: 0,       // cancels stale worker responses
   initialize(kp){ this._kp=kp; },
   onAdd(map){
     this._map=map;
@@ -1583,122 +1726,76 @@ const AuroraLayer = L.Layer.extend({
     this._canvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;';
     map.getPanes().overlayPane.appendChild(this._canvas);
     this._size={x:0,y:0};
-    this._rafId=null;
+    map.on('move',    this._onMove,    this);
     map.on('moveend', this._onMoveEnd, this);
-    map.on('zoomend resize', this._redraw, this);
-    this._redraw();
+    map.on('zoomend resize', this._scheduleRender, this);
+    this._scheduleRender();
     setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.85'; },80);
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
+    map.off('move',    this._onMove,    this);
     map.off('moveend', this._onMoveEnd, this);
-    map.off('zoomend resize', this._redraw, this);
-    if(this._rafId) cancelAnimationFrame(this._rafId);
+    map.off('zoomend resize', this._scheduleRender, this);
+    this._renderSeq++; // cancel any in-flight worker render
   },
-  setKp(kp){ this._kp=kp; this._ovation=null; this._redraw(); },
-  setOvation(data){ this._ovation=data; this._redraw(); },
-  // Pan end: just reposition canvas — don't resize, don't clear, just redraw content
+  setKp(kp){ this._kp=kp; this._ovation=null; this._bitmap=null; this._scheduleRender(); },
+  setOvation(data){ this._ovation=data; this._bitmap=null; this._scheduleRender(); },
+
+  // During drag: reposition canvas via CSS — zero JS repaint work.
+  _onMove(){
+    if(!this._canvas||!this._map||!this._bitmapOrigin) return;
+    const origin = this._map.getPixelOrigin();
+    const dx = this._bitmapOrigin.x - origin.x;
+    const dy = this._bitmapOrigin.y - origin.y;
+    L.DomUtil.setPosition(this._canvas,
+      this._map.containerPointToLayerPoint([0,0]).add(L.point(dx,dy)));
+  },
+  // Pan end: snap back and re-render at new position.
   _onMoveEnd(){
     if(!this._canvas||!this._map) return;
-    const map=this._map, size=map.getSize();
-    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-    // Only redraw if size changed (window resize during pan); otherwise just reposition
-    if(size.x===this._size.x && size.y===this._size.y){
-      if(this._rafId) cancelAnimationFrame(this._rafId);
-      this._rafId=requestAnimationFrame(()=>this._paint());
-    } else {
-      this._redraw();
+    const size = this._map.getSize();
+    if(size.x !== this._size.x || size.y !== this._size.y){
+      this._scheduleRender(); return;
     }
+    this._scheduleRender();
   },
-  // Full redraw: resize canvas + repaint. Only on zoom/resize.
-  _redraw(){
-    if(!this._canvas||!this._map) return;
-    if(this._rafId) cancelAnimationFrame(this._rafId);
-    this._rafId=requestAnimationFrame(()=>{
-      if(!this._canvas||!this._map) return;
-      const map=this._map, size=map.getSize();
-      if(!size.x||!size.y) return;
-      this._canvas.width=size.x; this._canvas.height=size.y;
-      this._size={x:size.x,y:size.y};
+  _scheduleRender(){
+    if(!this._map) return;
+    const map  = this._map;
+    const size = map.getSize();
+    if(!size.x||!size.y) return;
+    this._size = {x:size.x, y:size.y};
+
+    // World pixel origin of the top-left screen corner
+    const origin = map.getPixelOrigin();
+    const layerPt = map.containerPointToLayerPoint([0,0]);
+    const originX = origin.x + layerPt.x;
+    const originY = origin.y + layerPt.y;
+    const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
+
+    const seq = ++this._renderSeq;
+    _workerRender({
+      type: 'aurora',
+      width: size.x, height: size.y,
+      originX, originY, worldPx,
+      zoom: map.getZoom(),
+      kp: this._kp,
+      bands: getAuroraPalette(),
+      ovation: this._ovation ? this._ovation.coordinates : null,
+    }).then(bitmap => {
+      if(seq !== this._renderSeq || !this._canvas) return; // stale
+      this._bitmap = bitmap;
+      this._bitmapOrigin = map.getPixelOrigin();
+      // Resize canvas if needed, snap position, draw bitmap
+      if(this._canvas.width !== size.x) this._canvas.width = size.x;
+      if(this._canvas.height !== size.y) this._canvas.height = size.y;
       L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-      this._paint();
+      const ctx = this._canvas.getContext('2d');
+      ctx.clearRect(0,0,size.x,size.y);
+      ctx.drawImage(bitmap,0,0);
     });
   },
-  _paint(){
-    if(!this._canvas||!this._map) return;
-    const map=this._map, size=map.getSize();
-    const ctx=this._canvas.getContext('2d');
-    ctx.clearRect(0,0,size.x,size.y);
-    if(this._ovation) this._drawOvation(ctx,map,size);
-    else this._drawModelled(ctx,map,size);
-  },
-  _drawModelled(ctx, map, size){
-    const kp=this._kp, bands=getAuroraPalette();
-    const step=Math.max(2, Math.round(6/map.getZoom()));
-    for(let px=0;px<size.x;px+=step){
-      for(let py=0;py<size.y;py+=step){
-        const ll=map.containerPointToLatLng([px+step/2,py+step/2]);
-        const p=auroraProb(geomLat(ll.lat,ll.lng), kp);
-        if(p<bands[0][0]) continue;
-        const col=probToRGBA(p,bands); if(!col) continue;
-        ctx.fillStyle=`rgba(${col[0]},${col[1]},${col[2]},${(col[3]/255).toFixed(2)})`;
-        ctx.fillRect(px,py,step,step);
-      }
-    }
-    // Minimal blur — just enough to soften pixel edges, preserve band distinction
-    const tmp=document.createElement('canvas'); tmp.width=size.x; tmp.height=size.y;
-    const tctx=tmp.getContext('2d'); tctx.filter='blur(2px)'; tctx.drawImage(this._canvas,0,0);
-    ctx.clearRect(0,0,size.x,size.y); ctx.drawImage(tmp,0,0);
-  },
-  _drawOvation(ctx, map, size){
-    const bands = getAuroraPalette();
-    const coords = this._ovation.coordinates;
-
-    // Build a fast lookup: for each integer lon (-180..179), store array of {lat, prob}
-    // so we can query by longitude in O(1) during pixel sampling.
-    const byLon = {};
-    for(const [lon, lat, prob] of coords){
-      if(prob < bands[0][0]) continue;
-      const key = Math.round(((lon % 360) + 360) % 360) - 180; // normalise to -180..179
-      if(!byLon[key]) byLon[key] = [];
-      byLon[key].push({lat, prob});
-    }
-
-    // Sample every pixel like _drawModelled — inherently handles infinite world wrap
-    const step = Math.max(2, Math.round(6 / map.getZoom()));
-    for(let px = 0; px < size.x; px += step){
-      for(let py = 0; py < size.y; py += step){
-        const ll  = map.containerPointToLatLng([px + step/2, py + step/2]);
-        const lat = ll.lat;
-        // Normalise longitude to -180..179 to match OVATION data range
-        const lon = Math.round(((ll.lng % 360) + 360) % 360) - 180;
-
-        // Find best matching OVATION entry at this longitude
-        const entries = byLon[lon];
-        if(!entries) continue;
-        // Pick the entry whose latitude is closest to the screen pixel's latitude
-        let best = null, bestDist = Infinity;
-        for(const e of entries){
-          const d = Math.abs(e.lat - lat);
-          if(d < bestDist){ bestDist = d; best = e; }
-        }
-        if(!best || bestDist > 1.5 || best.prob < bands[0][0]) continue;
-
-        const col = probToRGBA(best.prob, bands);
-        if(!col) continue;
-        ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${(col[3]/255).toFixed(2)})`;
-        ctx.fillRect(px, py, step, step);
-      }
-    }
-    // Same minimal blur as modelled layer for visual consistency
-    const tmp = document.createElement('canvas');
-    tmp.width = size.x; tmp.height = size.y;
-    const tctx = tmp.getContext('2d');
-    tctx.filter = 'blur(2px)';
-    tctx.drawImage(this._canvas, 0, 0);
-    ctx.clearRect(0, 0, size.x, size.y);
-    ctx.drawImage(tmp, 0, 0);
-  }
 });
 
 function drawAuroraLayer(kp){
@@ -1707,19 +1804,17 @@ function drawAuroraLayer(kp){
   if(!layers.aurora) return;
   const spinner=document.getElementById('auroraSpinner');
   spinner.style.display='block';
-  setTimeout(()=>{
-    auroraLg=new AuroraLayer(kp).addTo(ncMap);
-    spinner.style.display='none';
-    updateAuroraLegend();
-    // Try OVATION upgrade in background
-    noaaFetch('/json/ovation_aurora_latest.json',12000).then(data=>{
-      if(data?.coordinates&&auroraLg&&layers.aurora){
-        auroraLg.setOvation(data);
-        const ts=data['Forecast Time']?new Date(data['Forecast Time']).toLocaleTimeString(currentLang,{hour:'2-digit',minute:'2-digit'}):'—';
-        document.getElementById('alSrc').textContent=`NOAA OVATION — ${ts} UTC`;
-      }
-    }).catch(()=>{});
-  },20);
+  auroraLg=new AuroraLayer(kp).addTo(ncMap);
+  spinner.style.display='none';
+  updateAuroraLegend();
+  // Try OVATION upgrade in background
+  noaaFetch('/json/ovation_aurora_latest.json',12000).then(data=>{
+    if(data?.coordinates&&auroraLg&&layers.aurora){
+      auroraLg.setOvation(data);
+      const ts=data['Forecast Time']?new Date(data['Forecast Time']).toLocaleTimeString(currentLang,{hour:'2-digit',minute:'2-digit'}):'—';
+      document.getElementById('alSrc').textContent=`NOAA OVATION — ${ts} UTC`;
+    }
+  }).catch(()=>{});
 }
 
 function updateAuroraLegend(){
@@ -1962,11 +2057,14 @@ function solarElevAngle(latDeg, lonDeg, sunLat, sunLon){
   ) * 180/Math.PI;
 }
 
-// ── DAY / NIGHT — canvas Leaflet layer ───────────────────────────────────────
-// Draws per-pixel solar elevation → smooth opacity like the reference image.
-// Redraws on every map move/zoom so it follows world wrap perfectly.
+// ── DAY / NIGHT — Worker-based canvas layer ───────────────────────────────────
+// Worker renders off main thread. During drag: canvas repositioned via CSS only.
+// Re-renders when pan > 80px from last render origin, or on zoom/timer.
 const DayNightLayer = L.Layer.extend({
   _date: null,
+  _bitmap: null,
+  _bitmapOrigin: null,  // map.getPixelOrigin() when bitmap was rendered
+  _renderSeq: 0,
   initialize(date){ this._date = date || new Date(); },
   onAdd(map){
     this._map = map;
@@ -1974,98 +2072,74 @@ const DayNightLayer = L.Layer.extend({
     this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
     map.getPanes().overlayPane.appendChild(this._canvas);
     this._size={x:0,y:0};
-    this._rafId=null;
+    map.on('move',    this._onMove,    this);
     map.on('moveend', this._onMoveEnd, this);
-    map.on('zoomend resize', this._redraw, this);
-    this._redraw();
+    map.on('zoomend resize', this._scheduleRender, this);
+    this._scheduleRender();
   },
   onRemove(map){
     if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
+    map.off('move',    this._onMove,    this);
     map.off('moveend', this._onMoveEnd, this);
-    map.off('zoomend resize', this._redraw, this);
-    if(this._rafId) cancelAnimationFrame(this._rafId);
+    map.off('zoomend resize', this._scheduleRender, this);
+    this._renderSeq++;
   },
-  setDate(date){ this._date = date; this._redraw(); },
+  setDate(date){ this._date = date; this._scheduleRender(); },
+  // During drag: CSS reposition only — zero repaint.
+  _onMove(){
+    if(!this._canvas||!this._map||!this._bitmapOrigin) return;
+    const origin = this._map.getPixelOrigin();
+    const dx = this._bitmapOrigin.x - origin.x;
+    const dy = this._bitmapOrigin.y - origin.y;
+    L.DomUtil.setPosition(this._canvas,
+      this._map.containerPointToLayerPoint([0,0]).add(L.point(dx,dy)));
+  },
+  // Pan end: re-render only if moved > 80px from last render origin.
   _onMoveEnd(){
-    if(!this._canvas||!this._map) return;
-    const map=this._map, size=map.getSize();
-    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-    if(size.x===this._size.x && size.y===this._size.y){
-      if(this._rafId) cancelAnimationFrame(this._rafId);
-      this._rafId=requestAnimationFrame(()=>this._paint());
-    } else {
-      this._redraw();
+    if(!this._map) return;
+    const size = this._map.getSize();
+    if(size.x !== this._size.x || size.y !== this._size.y){
+      this._scheduleRender(); return;
     }
+    if(!this._bitmapOrigin) { this._scheduleRender(); return; }
+    const origin = this._map.getPixelOrigin();
+    const dx = Math.abs(this._bitmapOrigin.x - origin.x);
+    const dy = Math.abs(this._bitmapOrigin.y - origin.y);
+    if(dx > 80 || dy > 80) this._scheduleRender();
+    // else: existing bitmap still good enough — don't re-render
   },
-  _redraw(){
-    if(!this._canvas || !this._map) return;
-    if(this._rafId) cancelAnimationFrame(this._rafId);
-    this._rafId=requestAnimationFrame(()=>{
-      if(!this._canvas||!this._map) return;
-      const map  = this._map;
-      const size = map.getSize();
-      if(!size.x || !size.y) return;
-      this._canvas.width  = size.x;
-      this._canvas.height = size.y;
-      this._size={x:size.x,y:size.y};
-      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
-      this._paint();
-    });
-  },
-  _paint(){
-    if(!this._canvas||!this._map) return;
-    const map=this._map, size=map.getSize();
-    const ctx = this._canvas.getContext('2d');
-    ctx.clearRect(0, 0, size.x, size.y);
+  _scheduleRender(){
+    if(!this._map) return;
+    const map  = this._map;
+    const size = map.getSize();
+    if(!size.x||!size.y) return;
+    this._size = {x:size.x, y:size.y};
 
+    const origin = map.getPixelOrigin();
+    const layerPt = map.containerPointToLayerPoint([0,0]);
+    const originX = origin.x + layerPt.x;
+    const originY = origin.y + layerPt.y;
+    const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
     const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
 
-    // Step 4px — good balance of speed and smoothness
-    const step = 4;
-    const imgData = ctx.createImageData(size.x, size.y);
-
-    for(let px = 0; px < size.x; px += step){
-      for(let py = 0; py < size.y; py += step){
-        const ll   = map.containerPointToLatLng([px + step/2, py + step/2]);
-        const elev = solarElevAngle(ll.lat, ll.lng, sunLat, sunLon);
-
-        // Opacity curve — harder transitions, closer to reference image:
-        // full day (elev > 3°)    → 0   (transparent)
-        // golden hour (0–3°)      → 0–0.10 (subtle warm edge on day side)
-        // blue hour / civil (-6°) → 0.10–0.38 (steeper ramp)
-        // nautical twilight (-12°)→ 0.38–0.58
-        // astronomical (-18°)     → 0.58–0.68
-        // deep night (< -18°)     → 0.68 (uniform dark)
-        let alpha = 0;
-        if(elev <= -18){
-          alpha = 0.68;
-        } else if(elev < -12){
-          alpha = 0.58 + 0.10 * (-12 - elev) / 6;
-        } else if(elev < -6){
-          alpha = 0.38 + 0.20 * (-6  - elev) / 6;
-        } else if(elev < 0){
-          alpha = 0.10 + 0.28 * (0   - elev) / 6;
-        } else if(elev < 3){
-          alpha = 0.10 * (3 - elev) / 3;
-        }
-
-        if(alpha < 0.01) continue;
-
-        // Night colour: deep blue-navy (matches reference)
-        const a255 = Math.round(alpha * 255);
-        for(let dx = 0; dx < step && px+dx < size.x; dx++){
-          for(let dy = 0; dy < step && py+dy < size.y; dy++){
-            const i = ((py+dy)*size.x + (px+dx)) * 4;
-            imgData.data[i]   = 15;   // R
-            imgData.data[i+1] = 28;   // G
-            imgData.data[i+2] = 64;   // B
-            imgData.data[i+3] = a255;
-          }
-        }
-      }
-    }
-    ctx.putImageData(imgData, 0, 0);
-  }
+    const seq = ++this._renderSeq;
+    _workerRender({
+      type: 'daynight',
+      width: size.x, height: size.y,
+      originX, originY, worldPx,
+      sunLat, sunLon,
+    }).then(bitmap => {
+      if(seq !== this._renderSeq || !this._canvas) return;
+      this._bitmap = bitmap;
+      this._bitmapOrigin = map.getPixelOrigin();
+      if(this._canvas.width  !== size.x) this._canvas.width  = size.x;
+      if(this._canvas.height !== size.y) this._canvas.height = size.y;
+      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      const ctx = this._canvas.getContext('2d');
+      ctx.clearRect(0,0,size.x,size.y);
+      ctx.drawImage(bitmap,0,0);
+    });
+  },
 });
 
 function drawDayNight(){
@@ -2102,7 +2176,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.94 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.95 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2498,7 +2572,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.94 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.95 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -3484,7 +3558,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.94';
+  document.title = ORIG_TITLE || 'NightCompass v0.95';
   kpAlertActive = false;
 }
 
@@ -4769,7 +4843,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.94</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.95</div>
   </div>
 </div>
 </body>
