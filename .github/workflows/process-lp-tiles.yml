@@ -191,17 +191,19 @@ jobs:
                       print(f'  ✗ {tile_id} download exception: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
 
+                  # DIAGNOSTIC: print full HDF5 structure
                   try:
+                      def print_hdf5(name, obj):
+                          if hasattr(obj, 'dtype'):
+                              print(f'    DATASET: {name} shape={obj.shape} dtype={obj.dtype}')
+                          else:
+                              print(f'    GROUP:   {name}')
                       with h5py.File(h5_path,'r') as hf:
-                          grp  = hf['HDFEOS/GRIDS/VNP_Grid_DNB/Data Fields']
-                          band = ('NearNadir_Composite_Snow_Free'
-                                  if 'NearNadir_Composite_Snow_Free' in grp
-                                  else 'AllAngle_Composite_Snow_Free')
-                          raw  = grp[band][:]
-                          rad  = np.where(raw==65535, np.nan, raw.astype(float)*0.1)
+                          print(f'  HDF5 structure of {filename}:')
+                          hf.visititems(print_hdf5)
                   except Exception as e:
-                      print(f'  ✗ {tile_id} HDF5: {e}')
-                      h5_path.unlink(missing_ok=True); failed+=1; continue
+                      print(f'  ✗ {tile_id} HDF5 diagnostic: {e}')
+                  h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   rgba    = apply_ramp(rad)
                   src_img = Image.fromarray(rgba,'RGBA')
@@ -429,17 +431,19 @@ jobs:
                       print(f'  ✗ {tile_id} download exception: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
 
+                  # DIAGNOSTIC: print full HDF5 structure
                   try:
+                      def print_hdf5(name, obj):
+                          if hasattr(obj, 'dtype'):
+                              print(f'    DATASET: {name} shape={obj.shape} dtype={obj.dtype}')
+                          else:
+                              print(f'    GROUP:   {name}')
                       with h5py.File(h5_path,'r') as hf:
-                          grp  = hf['HDFEOS/GRIDS/VNP_Grid_DNB/Data Fields']
-                          band = ('NearNadir_Composite_Snow_Free'
-                                  if 'NearNadir_Composite_Snow_Free' in grp
-                                  else 'AllAngle_Composite_Snow_Free')
-                          raw  = grp[band][:]
-                          rad  = np.where(raw==65535, np.nan, raw.astype(float)*0.1)
+                          print(f'  HDF5 structure of {filename}:')
+                          hf.visititems(print_hdf5)
                   except Exception as e:
-                      print(f'  ✗ {tile_id} HDF5: {e}')
-                      h5_path.unlink(missing_ok=True); failed+=1; continue
+                      print(f'  ✗ {tile_id} HDF5 diagnostic: {e}')
+                  h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   rgba    = apply_ramp(rad)
                   src_img = Image.fromarray(rgba,'RGBA')
