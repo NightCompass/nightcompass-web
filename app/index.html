@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.99</title>
+<title>NightCompass v0.100</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.99</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.100</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1744,12 +1744,13 @@ const AuroraLayer = L.Layer.extend({
     const size = map.getSize();
     if(!size.x || !size.y) return;
 
-    // Snapshot the render params now (map may move before worker returns)
+    // Snapshot render params — getPixelOrigin() is Leaflet's authoritative
+    // world-pixel coordinate of the viewport top-left at current zoom.
     const zoom    = map.getZoom();
     const worldPx = Math.pow(2, zoom) * 256;
-    const nwPx    = map.project(map.containerPointToLatLng([0, 0]));
-    const originX = nwPx.x;
-    const originY = nwPx.y;
+    const origin  = map.getPixelOrigin();
+    const originX = origin.x;
+    const originY = origin.y;
     const w = size.x, h = size.y;
 
     const seq = ++this._renderSeq;
@@ -1963,10 +1964,10 @@ function updateMapTiles(){
 
 function initMap(){
   ncMap=L.map('map',{
-    center:[20,0], zoom:2, zoomControl:false, minZoom:2,
-    maxBounds:[[-90,-180],[90,180]],  // single world — no infinite horizontal scroll
-    maxBoundsViscosity:1.0,           // hard stop at all edges
-    worldCopyJump: false              // disable world-copy repetition
+    center:[20,0], zoom:3, zoomControl:false, minZoom:3,
+    maxBounds:[[-85.06,-180],[85.06,180]], // single world — hard stop at all edges
+    maxBoundsViscosity:1.0,
+    worldCopyJump: false,
   });
 
   if(typeof L.maplibreGL === 'function'){
@@ -2059,9 +2060,9 @@ const DayNightLayer = L.Layer.extend({
 
     const zoom    = map.getZoom();
     const worldPx = Math.pow(2, zoom) * 256;
-    const nwPx    = map.project(map.containerPointToLatLng([0, 0]));
-    const originX = nwPx.x;
-    const originY = nwPx.y;
+    const origin  = map.getPixelOrigin();
+    const originX = origin.x;
+    const originY = origin.y;
     const w = size.x, h = size.y;
     const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
 
@@ -2114,7 +2115,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.99 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.100 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2500,7 +2501,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.99 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.100 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -3486,7 +3487,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.99';
+  document.title = ORIG_TITLE || 'NightCompass v0.100';
   kpAlertActive = false;
 }
 
@@ -4771,7 +4772,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.99</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.100</div>
   </div>
 </div>
 </body>
