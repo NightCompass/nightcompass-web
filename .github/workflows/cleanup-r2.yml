@@ -1,0 +1,119 @@
+name: Clean R2 Light Pollution Tiles
+
+# ── Manual trigger only ───────────────────────────────────────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Year to delete (e.g. 2023). Deletes all tiles under lp/{year}/'
+        required: true
+        default: '2023'
+        type: string
+      confirm:
+        description: 'Type DELETE to confirm — this is irreversible'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    name: "Delete lp/${{ inputs.year }}/ from R2"
+    runs-on: ubuntu-latest
+    if: ${{ inputs.confirm == 'DELETE' }}
+    steps:
+      - name: Delete all tiles for year ${{ inputs.year }}
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          YEAR: ${{ inputs.year }}
+        run: |
+          python3 - << 'PY'
+          import os, hmac, hashlib, datetime, urllib.request, urllib.parse
+          import xml.etree.ElementTree as ET, base64
+
+          R2_KEY     = os.environ['R2_ACCESS_KEY_ID']
+          R2_SECRET  = os.environ['R2_SECRET_ACCESS_KEY']
+          R2_BUCKET  = os.environ['R2_BUCKET']
+          R2_ACCOUNT = os.environ['R2_ACCOUNT_ID']
+          YEAR       = os.environ['YEAR']
+          PREFIX     = f'lp/{YEAR}/'
+          HOST       = f'{R2_ACCOUNT}.r2.cloudflarestorage.com'
+          ENDPOINT   = f'https://{HOST}'
+
+          def aws_headers(method, path, query='', payload=b'', extra_hdrs=None):
+              now = datetime.datetime.now(datetime.timezone.utc)
+              ds  = now.strftime('%Y%m%d'); ts = now.strftime('%Y%m%dT%H%M%SZ')
+              ph  = hashlib.sha256(payload).hexdigest()
+              hdrs = {'host': HOST, 'x-amz-content-sha256': ph, 'x-amz-date': ts}
+              if extra_hdrs: hdrs.update(extra_hdrs)
+              ch  = ''.join(f'{k}:{v}\n' for k,v in sorted(hdrs.items()))
+              sh  = ';'.join(sorted(hdrs.keys()))
+              cr  = '\n'.join([method, path, query, ch, sh, ph])
+              cs  = f'{ds}/auto/s3/aws4_request'
+              sts = '\n'.join(['AWS4-HMAC-SHA256', ts, cs,
+                               hashlib.sha256(cr.encode()).hexdigest()])
+              def h256(k, m): return hmac.new(k, m.encode(), hashlib.sha256).digest()
+              sk  = h256(h256(h256(h256(f'AWS4{R2_SECRET}'.encode(),ds),'auto'),'s3'),'aws4_request')
+              sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
+              hdrs['Authorization'] = (f'AWS4-HMAC-SHA256 Credential={R2_KEY}/{cs},'
+                                       f'SignedHeaders={sh},Signature={sig}')
+              return hdrs
+
+          def list_keys(prefix, token=None):
+              params = {'list-type':'2','prefix':prefix,'max-keys':'1000'}
+              if token: params['continuation-token'] = token
+              q    = urllib.parse.urlencode(params)
+              hdrs = aws_headers('GET', f'/{R2_BUCKET}', q)
+              req  = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?{q}', headers=hdrs)
+              with urllib.request.urlopen(req) as r: root = ET.fromstring(r.read())
+              ns   = {'s3':'http://s3.amazonaws.com/doc/2006-03-01/'}
+              keys = [el.text for el in root.findall('.//s3:Key', ns)]
+              nxt  = root.find('s3:NextContinuationToken', ns)
+              return keys, (nxt.text if nxt is not None else None)
+
+          def delete_keys(keys):
+              if not keys: return 0
+              objs = ''.join(f'<Object><Key>{k}</Key></Object>' for k in keys)
+              body = f'<?xml version="1.0"?><Delete><Quiet>true</Quiet>{objs}</Delete>'.encode()
+              md5  = base64.b64encode(hashlib.md5(body).digest()).decode()
+              extra = {'content-md5': md5, 'content-type': 'application/xml'}
+              hdrs  = aws_headers('POST', f'/{R2_BUCKET}', 'delete=', body, extra)
+              req   = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?delete=',
+                                             data=body, method='POST', headers=hdrs)
+              with urllib.request.urlopen(req) as r: r.read()
+              return len(keys)
+
+          print(f'Scanning {R2_BUCKET}/{PREFIX} ...')
+          # First pass: count objects
+          total_found = 0; token = None
+          while True:
+              keys, token = list_keys(PREFIX, token)
+              total_found += len(keys)
+              if not token: break
+          print(f'Found {total_found:,} objects to delete')
+
+          # Second pass: delete
+          total_deleted = 0; token = None
+          while True:
+              keys, token = list_keys(PREFIX, token)
+              if keys:
+                  total_deleted += delete_keys(keys)
+                  print(f'  Deleted {total_deleted:,} / {total_found:,}...')
+              if not token: break
+
+          print(f'\n✓ Done — {total_deleted:,} objects deleted from {R2_BUCKET}/{PREFIX}')
+          PY
+
+  skip:
+    name: "Skipped — confirm field was not DELETE"
+    runs-on: ubuntu-latest
+    if: ${{ inputs.confirm != 'DELETE' }}
+    steps:
+      - run: |
+          echo "⚠ Cleanup skipped."
+          echo "You must type DELETE (uppercase) in the confirm field to proceed."
+          exit 1
