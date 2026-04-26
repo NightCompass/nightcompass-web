@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.97</title>
+<title>NightCompass v0.98</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.97</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.98</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1716,54 +1716,53 @@ function probToRGBA(p, bands){
 const AuroraLayer = L.Layer.extend({
   _kp: 3,
   _ovation: null,
-  _bitmap: null,
   _renderSeq: 0,
-  initialize(kp){ this._kp=kp; },
+  initialize(kp){ this._kp = kp; },
   onAdd(map){
-    this._map=map;
-    this._canvas=document.createElement('canvas');
-    this._canvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;';
+    this._map = map;
+    this._canvas = document.createElement('canvas');
+    // Canvas is a fixed overlay sized to the viewport.
+    // The overlay pane's own CSS transform handles pan — we never move it.
+    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;';
     map.getPanes().overlayPane.appendChild(this._canvas);
-    this._size={x:0,y:0};
     map.on('moveend zoomend resize', this._scheduleRender, this);
     this._scheduleRender();
-    setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.85'; },80);
+    setTimeout(() => { if(this._canvas) this._canvas.style.opacity = '0.85'; }, 80);
   },
   onRemove(map){
-    if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
     map.off('moveend zoomend resize', this._scheduleRender, this);
-    this._renderSeq++;
+    this._renderSeq++; // invalidate any in-flight render
+    if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas = null; }
   },
-  setKp(kp){ this._kp=kp; this._ovation=null; this._scheduleRender(); },
-  setOvation(data){ this._ovation=data; this._scheduleRender(); },
+  setKp(kp)     { this._kp = kp; this._ovation = null; this._scheduleRender(); },
+  setOvation(data){ this._ovation = data; this._scheduleRender(); },
   _scheduleRender(){
-    if(!this._map) return;
+    if(!this._map || !this._canvas) return;
     const map  = this._map;
     const size = map.getSize();
-    if(!size.x||!size.y) return;
-    this._size = {x:size.x, y:size.y};
+    if(!size.x || !size.y) return;
 
-    // World pixel coords of canvas top-left = project(NW corner of screen)
-    const nwPx    = map.project(map.containerPointToLatLng([0,0]));
+    // Snapshot the render params now (map may move before worker returns)
+    const zoom    = map.getZoom();
+    const worldPx = Math.pow(2, zoom) * 256;
+    const nwPx    = map.project(map.containerPointToLatLng([0, 0]));
     const originX = nwPx.x;
     const originY = nwPx.y;
-    const worldPx = Math.pow(2, map.getZoom()) * 256;
+    const w = size.x, h = size.y;
 
     const seq = ++this._renderSeq;
     _workerRender({
       type: 'aurora',
-      width: size.x, height: size.y,
+      width: w, height: h,
       originX, originY, worldPx,
-      zoom: map.getZoom(),
       kp: this._kp,
       bands: getAuroraPalette(),
       ovation: this._ovation ? this._ovation.coordinates : null,
     }).then(bitmap => {
-      if(seq !== this._renderSeq || !this._canvas) return;
-      this._bitmap = bitmap;
-      if(this._canvas.width  !== size.x) this._canvas.width  = size.x;
-      if(this._canvas.height !== size.y) this._canvas.height = size.y;
-      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      if(seq !== this._renderSeq || !this._canvas) return; // stale or removed
+      // Resize resets canvas content — do it before drawing
+      this._canvas.width  = w;
+      this._canvas.height = h;
       this._canvas.getContext('2d').drawImage(bitmap, 0, 0);
     });
   },
@@ -2040,41 +2039,39 @@ const DayNightLayer = L.Layer.extend({
     this._canvas = document.createElement('canvas');
     this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
     map.getPanes().overlayPane.appendChild(this._canvas);
-    this._size={x:0,y:0};
     map.on('moveend zoomend resize', this._scheduleRender, this);
     this._scheduleRender();
   },
   onRemove(map){
-    if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
     map.off('moveend zoomend resize', this._scheduleRender, this);
     this._renderSeq++;
+    if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas = null; }
   },
   setDate(date){ this._date = date; this._scheduleRender(); },
   _scheduleRender(){
-    if(!this._map) return;
+    if(!this._map || !this._canvas) return;
     const map  = this._map;
     const size = map.getSize();
-    if(!size.x||!size.y) return;
-    this._size = {x:size.x, y:size.y};
+    if(!size.x || !size.y) return;
 
-    // World pixel coords of canvas top-left = project(NW corner of screen)
-    const nwPx    = map.project(map.containerPointToLatLng([0,0]));
+    const zoom    = map.getZoom();
+    const worldPx = Math.pow(2, zoom) * 256;
+    const nwPx    = map.project(map.containerPointToLatLng([0, 0]));
     const originX = nwPx.x;
     const originY = nwPx.y;
-    const worldPx = Math.pow(2, map.getZoom()) * 256;
+    const w = size.x, h = size.y;
     const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
 
     const seq = ++this._renderSeq;
     _workerRender({
       type: 'daynight',
-      width: size.x, height: size.y,
+      width: w, height: h,
       originX, originY, worldPx,
       sunLat, sunLon,
     }).then(bitmap => {
       if(seq !== this._renderSeq || !this._canvas) return;
-      if(this._canvas.width  !== size.x) this._canvas.width  = size.x;
-      if(this._canvas.height !== size.y) this._canvas.height = size.y;
-      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      this._canvas.width  = w;
+      this._canvas.height = h;
       this._canvas.getContext('2d').drawImage(bitmap, 0, 0);
     });
   },
@@ -2114,7 +2111,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.97 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.98 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2510,7 +2507,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.97 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.98 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -3496,7 +3493,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.97';
+  document.title = ORIG_TITLE || 'NightCompass v0.98';
   kpAlertActive = false;
 }
 
@@ -4781,7 +4778,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.97</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.98</div>
   </div>
 </div>
 </body>
