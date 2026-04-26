@@ -138,7 +138,7 @@ jobs:
           processed=0; failed=0; total_bytes=0; total_tiles=0
 
           for v in range(V_START, V_END+1):
-              for h in range(36):
+              for h in range(1):  # DIAGNOSTIC: only h00 to keep logs short
                   tile_id = f'h{h:02d}v{v:02d}'
                   west=h*10-180; east=west+10; north=90-v*10; south=north-10
 
@@ -164,29 +164,29 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  # Use wget — handles LAADS EDL OAuth redirect reliably
-                  # curl -b session requires a real cookie jar file; wget handles it natively
+                  # Use wget with verbose output for diagnosis
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'wget', '-q', '--no-check-certificate',
-                          '--load-cookies', '/tmp/laads_cookies.txt',
+                          'wget', '-v', '-S',
                           '--save-cookies', '/tmp/laads_cookies.txt',
                           '--keep-session-cookies',
                           '--header', f'Authorization: Bearer {NASA_TOKEN}',
                           '-O', str(h5_path), dl_url
-                      ], capture_output=True, timeout=300)
+                      ], capture_output=True, timeout=300, text=True)
+                      # Print wget output for diagnosis
+                      if result.stdout: print(f'    wget stdout: {result.stdout[:500]}')
+                      if result.stderr: print(f'    wget stderr: {result.stderr[:500]}')
                       sz = h5_path.stat().st_size if h5_path.exists() else 0
-                      if sz < 1024 * 100:  # less than 100KB = almost certainly HTML error
-                          # Print first 200 bytes for diagnosis
+                      if sz < 1024 * 100:
                           try:
-                              with open(h5_path,'rb') as dbg: snippet = dbg.read(200)
-                              print(f'  ✗ {tile_id} download: got {sz} bytes (expected >1MB) — {snippet[:100]}')
+                              with open(h5_path,'rb') as dbg: snippet = dbg.read(300)
+                              print(f'  ✗ {tile_id}: got {sz} bytes — {snippet}')
                           except: pass
                           h5_path.unlink(missing_ok=True); failed+=1; continue
                       print(f'  ↓ {tile_id}: {sz/1024/1024:.1f} MB')
                   except Exception as e:
-                      print(f'  ✗ {tile_id} download: {e}')
+                      print(f'  ✗ {tile_id} download exception: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   try:
@@ -374,7 +374,7 @@ jobs:
           processed=0; failed=0; total_bytes=0; total_tiles=0
 
           for v in range(V_START, V_END+1):
-              for h in range(36):
+              for h in range(1):  # DIAGNOSTIC: only h00 to keep logs short
                   tile_id = f'h{h:02d}v{v:02d}'
                   west=h*10-180; east=west+10; north=90-v*10; south=north-10
 
@@ -400,29 +400,29 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  # Use wget — handles LAADS EDL OAuth redirect reliably
-                  # curl -b session requires a real cookie jar file; wget handles it natively
+                  # Use wget with verbose output for diagnosis
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'wget', '-q', '--no-check-certificate',
-                          '--load-cookies', '/tmp/laads_cookies.txt',
+                          'wget', '-v', '-S',
                           '--save-cookies', '/tmp/laads_cookies.txt',
                           '--keep-session-cookies',
                           '--header', f'Authorization: Bearer {NASA_TOKEN}',
                           '-O', str(h5_path), dl_url
-                      ], capture_output=True, timeout=300)
+                      ], capture_output=True, timeout=300, text=True)
+                      # Print wget output for diagnosis
+                      if result.stdout: print(f'    wget stdout: {result.stdout[:500]}')
+                      if result.stderr: print(f'    wget stderr: {result.stderr[:500]}')
                       sz = h5_path.stat().st_size if h5_path.exists() else 0
-                      if sz < 1024 * 100:  # less than 100KB = almost certainly HTML error
-                          # Print first 200 bytes for diagnosis
+                      if sz < 1024 * 100:
                           try:
-                              with open(h5_path,'rb') as dbg: snippet = dbg.read(200)
-                              print(f'  ✗ {tile_id} download: got {sz} bytes (expected >1MB) — {snippet[:100]}')
+                              with open(h5_path,'rb') as dbg: snippet = dbg.read(300)
+                              print(f'  ✗ {tile_id}: got {sz} bytes — {snippet}')
                           except: pass
                           h5_path.unlink(missing_ok=True); failed+=1; continue
                       print(f'  ↓ {tile_id}: {sz/1024/1024:.1f} MB')
                   except Exception as e:
-                      print(f'  ✗ {tile_id} download: {e}')
+                      print(f'  ✗ {tile_id} download exception: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   try:
