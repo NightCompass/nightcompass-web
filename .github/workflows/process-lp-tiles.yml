@@ -164,19 +164,21 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  # Use wget with verbose output for diagnosis
+                  # Use curl with cookie jar + forward Authorization through redirects
+                  # wget drops the Authorization header on 303 redirects — curl handles it correctly
+                  # -c/-b: cookie jar  -L: follow redirects  --location-trusted: keep auth header
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'wget', '-v', '-S',
-                          '--save-cookies', '/tmp/laads_cookies.txt',
-                          '--keep-session-cookies',
-                          '--header', f'Authorization: Bearer {NASA_TOKEN}',
-                          '-O', str(h5_path), dl_url
+                          'curl', '-v', '-L', '--location-trusted',
+                          '-c', '/tmp/laads_cookies.txt',
+                          '-b', '/tmp/laads_cookies.txt',
+                          '-H', f'Authorization: Bearer {NASA_TOKEN}',
+                          '-o', str(h5_path), dl_url
                       ], capture_output=True, timeout=300, text=True)
                       # Print wget output for diagnosis
-                      if result.stdout: print(f'    wget stdout: {result.stdout[:500]}')
-                      if result.stderr: print(f'    wget stderr: {result.stderr[:500]}')
+                      if result.stdout: print(f'    curl stdout: {result.stdout[:200]}')
+                      if result.stderr: print(f'    curl stderr: {result.stderr[:800]}')
                       sz = h5_path.stat().st_size if h5_path.exists() else 0
                       if sz < 1024 * 100:
                           try:
@@ -400,19 +402,21 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  # Use wget with verbose output for diagnosis
+                  # Use curl with cookie jar + forward Authorization through redirects
+                  # wget drops the Authorization header on 303 redirects — curl handles it correctly
+                  # -c/-b: cookie jar  -L: follow redirects  --location-trusted: keep auth header
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'wget', '-v', '-S',
-                          '--save-cookies', '/tmp/laads_cookies.txt',
-                          '--keep-session-cookies',
-                          '--header', f'Authorization: Bearer {NASA_TOKEN}',
-                          '-O', str(h5_path), dl_url
+                          'curl', '-v', '-L', '--location-trusted',
+                          '-c', '/tmp/laads_cookies.txt',
+                          '-b', '/tmp/laads_cookies.txt',
+                          '-H', f'Authorization: Bearer {NASA_TOKEN}',
+                          '-o', str(h5_path), dl_url
                       ], capture_output=True, timeout=300, text=True)
                       # Print wget output for diagnosis
-                      if result.stdout: print(f'    wget stdout: {result.stdout[:500]}')
-                      if result.stderr: print(f'    wget stderr: {result.stderr[:500]}')
+                      if result.stdout: print(f'    curl stdout: {result.stdout[:200]}')
+                      if result.stderr: print(f'    curl stderr: {result.stderr[:800]}')
                       sz = h5_path.stat().st_size if h5_path.exists() else 0
                       if sz < 1024 * 100:
                           try:
