@@ -138,7 +138,7 @@ jobs:
           processed=0; failed=0; total_bytes=0; total_tiles=0
 
           for v in range(V_START, V_END+1):
-              for h in range(1):  # DIAGNOSTIC: only h00 to keep logs short
+              for h in range(36):
                   tile_id = f'h{h:02d}v{v:02d}'
                   west=h*10-180; east=west+10; north=90-v*10; south=north-10
 
@@ -170,15 +170,13 @@ jobs:
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'curl', '-v', '-L', '--location-trusted',
+                          'curl', '-sS', '-L', '--location-trusted',
                           '-c', '/tmp/laads_cookies.txt',
                           '-b', '/tmp/laads_cookies.txt',
                           '-H', f'Authorization: Bearer {NASA_TOKEN}',
                           '-o', str(h5_path), dl_url
                       ], capture_output=True, timeout=300, text=True)
                       # Print wget output for diagnosis
-                      if result.stdout: print(f'    curl stdout: {result.stdout[:200]}')
-                      if result.stderr: print(f'    curl stderr: {result.stderr[:800]}')
                       sz = h5_path.stat().st_size if h5_path.exists() else 0
                       if sz < 1024 * 100:
                           try:
@@ -191,19 +189,19 @@ jobs:
                       print(f'  ✗ {tile_id} download exception: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
 
-                  # DIAGNOSTIC: print full HDF5 structure
                   try:
-                      def print_hdf5(name, obj):
-                          if hasattr(obj, 'dtype'):
-                              print(f'    DATASET: {name} shape={obj.shape} dtype={obj.dtype}')
-                          else:
-                              print(f'    GROUP:   {name}')
                       with h5py.File(h5_path,'r') as hf:
-                          print(f'  HDF5 structure of {filename}:')
-                          hf.visititems(print_hdf5)
+                          grp  = hf['HDFEOS/GRIDS/VIIRS_Grid_DNB_2d/Data Fields']
+                          # NearNadir is cleanest; fall back to AllAngle if missing
+                          band = ('NearNadir_Composite_Snow_Free'
+                                  if 'NearNadir_Composite_Snow_Free' in grp
+                                  else 'AllAngle_Composite_Snow_Free')
+                          raw  = grp[band][:]  # float32, already in nW/cm²/sr
+                          # Fill value is 65535.0 or NaN — mask both
+                          rad  = np.where((raw >= 65535) | ~np.isfinite(raw), np.nan, raw)
                   except Exception as e:
-                      print(f'  ✗ {tile_id} HDF5 diagnostic: {e}')
-                  h5_path.unlink(missing_ok=True); failed+=1; continue
+                      print(f'  ✗ {tile_id} HDF5: {e}')
+                      h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   rgba    = apply_ramp(rad)
                   src_img = Image.fromarray(rgba,'RGBA')
@@ -378,7 +376,7 @@ jobs:
           processed=0; failed=0; total_bytes=0; total_tiles=0
 
           for v in range(V_START, V_END+1):
-              for h in range(1):  # DIAGNOSTIC: only h00 to keep logs short
+              for h in range(36):
                   tile_id = f'h{h:02d}v{v:02d}'
                   west=h*10-180; east=west+10; north=90-v*10; south=north-10
 
@@ -410,15 +408,13 @@ jobs:
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'curl', '-v', '-L', '--location-trusted',
+                          'curl', '-sS', '-L', '--location-trusted',
                           '-c', '/tmp/laads_cookies.txt',
                           '-b', '/tmp/laads_cookies.txt',
                           '-H', f'Authorization: Bearer {NASA_TOKEN}',
                           '-o', str(h5_path), dl_url
                       ], capture_output=True, timeout=300, text=True)
                       # Print wget output for diagnosis
-                      if result.stdout: print(f'    curl stdout: {result.stdout[:200]}')
-                      if result.stderr: print(f'    curl stderr: {result.stderr[:800]}')
                       sz = h5_path.stat().st_size if h5_path.exists() else 0
                       if sz < 1024 * 100:
                           try:
@@ -431,19 +427,19 @@ jobs:
                       print(f'  ✗ {tile_id} download exception: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
 
-                  # DIAGNOSTIC: print full HDF5 structure
                   try:
-                      def print_hdf5(name, obj):
-                          if hasattr(obj, 'dtype'):
-                              print(f'    DATASET: {name} shape={obj.shape} dtype={obj.dtype}')
-                          else:
-                              print(f'    GROUP:   {name}')
                       with h5py.File(h5_path,'r') as hf:
-                          print(f'  HDF5 structure of {filename}:')
-                          hf.visititems(print_hdf5)
+                          grp  = hf['HDFEOS/GRIDS/VIIRS_Grid_DNB_2d/Data Fields']
+                          # NearNadir is cleanest; fall back to AllAngle if missing
+                          band = ('NearNadir_Composite_Snow_Free'
+                                  if 'NearNadir_Composite_Snow_Free' in grp
+                                  else 'AllAngle_Composite_Snow_Free')
+                          raw  = grp[band][:]  # float32, already in nW/cm²/sr
+                          # Fill value is 65535.0 or NaN — mask both
+                          rad  = np.where((raw >= 65535) | ~np.isfinite(raw), np.nan, raw)
                   except Exception as e:
-                      print(f'  ✗ {tile_id} HDF5 diagnostic: {e}')
-                  h5_path.unlink(missing_ok=True); failed+=1; continue
+                      print(f'  ✗ {tile_id} HDF5: {e}')
+                      h5_path.unlink(missing_ok=True); failed+=1; continue
 
                   rgba    = apply_ramp(rad)
                   src_img = Image.fromarray(rgba,'RGBA')
