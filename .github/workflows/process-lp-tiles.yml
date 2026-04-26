@@ -142,15 +142,17 @@ jobs:
                   tile_id = f'h{h:02d}v{v:02d}'
                   west=h*10-180; east=west+10; north=90-v*10; south=north-10
 
+                  # LAADS directory listing: append .json to the day URL
+                  # Returns {"content": [{"name": "VNP46A4.A2023001.h00v05...", "size": 12345}, ...]}
                   list_url = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
-                              f'{PRODUCT}/{YEAR}/{DAY}/?fields=name')
+                              f'{PRODUCT}/{YEAR}/{DAY}.json')
                   req = urllib.request.Request(list_url)
                   req.add_header('Authorization', f'Bearer {NASA_TOKEN}')
-                  req.add_header('Accept', 'application/json')
                   try:
                       with urllib.request.urlopen(req, timeout=30) as r:
-                          files = json.loads(r.read())
-                      matches = [f['name'] for f in files if tile_id in f.get('name','')]
+                          resp = json.loads(r.read())
+                      files = resp.get('content', resp) if isinstance(resp, dict) else resp
+                      matches = [f['name'] for f in files if tile_id in f.get('name','') and f.get('name','').endswith('.h5')]
                       if not matches:
                           print(f'  skip {tile_id}: not found')
                           continue
@@ -361,15 +363,17 @@ jobs:
                   tile_id = f'h{h:02d}v{v:02d}'
                   west=h*10-180; east=west+10; north=90-v*10; south=north-10
 
+                  # LAADS directory listing: append .json to the day URL
+                  # Returns {"content": [{"name": "VNP46A4.A2023001.h00v05...", "size": 12345}, ...]}
                   list_url = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
-                              f'{PRODUCT}/{YEAR}/{DAY}/?fields=name')
+                              f'{PRODUCT}/{YEAR}/{DAY}.json')
                   req = urllib.request.Request(list_url)
                   req.add_header('Authorization', f'Bearer {NASA_TOKEN}')
-                  req.add_header('Accept', 'application/json')
                   try:
                       with urllib.request.urlopen(req, timeout=30) as r:
-                          files = json.loads(r.read())
-                      matches = [f['name'] for f in files if tile_id in f.get('name','')]
+                          resp = json.loads(r.read())
+                      files = resp.get('content', resp) if isinstance(resp, dict) else resp
+                      matches = [f['name'] for f in files if tile_id in f.get('name','') and f.get('name','').endswith('.h5')]
                       if not matches:
                           print(f'  skip {tile_id}: not found')
                           continue
