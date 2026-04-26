@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y python3-pip libhdf5-dev
+          sudo apt-get install -y python3-pip libhdf5-dev wget
           pip3 install h5py numpy Pillow --break-system-packages
           echo "✓ Dependencies installed"
 
@@ -164,18 +164,27 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  # Use curl with -L (follow redirects) and -b session (forward cookies)
-                  # urllib.request does not handle LAADS OAuth redirects correctly
+                  # Use wget — handles LAADS EDL OAuth redirect reliably
+                  # curl -b session requires a real cookie jar file; wget handles it natively
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'curl', '--fail', '-sS', '-L', '-b', 'session',
-                          '-H', f'Authorization: Bearer {NASA_TOKEN}',
-                          '-o', str(h5_path), dl_url
+                          'wget', '-q', '--no-check-certificate',
+                          '--load-cookies', '/tmp/laads_cookies.txt',
+                          '--save-cookies', '/tmp/laads_cookies.txt',
+                          '--keep-session-cookies',
+                          '--header', f'Authorization: Bearer {NASA_TOKEN}',
+                          '-O', str(h5_path), dl_url
                       ], capture_output=True, timeout=300)
-                      if result.returncode != 0:
-                          raise RuntimeError(result.stderr.decode().strip())
-                      print(f'  ↓ {tile_id}: {h5_path.stat().st_size/1024/1024:.1f} MB')
+                      sz = h5_path.stat().st_size if h5_path.exists() else 0
+                      if sz < 1024 * 100:  # less than 100KB = almost certainly HTML error
+                          # Print first 200 bytes for diagnosis
+                          try:
+                              with open(h5_path,'rb') as dbg: snippet = dbg.read(200)
+                              print(f'  ✗ {tile_id} download: got {sz} bytes (expected >1MB) — {snippet[:100]}')
+                          except: pass
+                          h5_path.unlink(missing_ok=True); failed+=1; continue
+                      print(f'  ↓ {tile_id}: {sz/1024/1024:.1f} MB')
                   except Exception as e:
                       print(f'  ✗ {tile_id} download: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
@@ -258,7 +267,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y python3-pip libhdf5-dev
+          sudo apt-get install -y python3-pip libhdf5-dev wget
           pip3 install h5py numpy Pillow --break-system-packages
           echo "✓ Dependencies installed"
 
@@ -391,18 +400,27 @@ jobs:
                   h5_path = tmp_dir/filename
                   dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
                              f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
-                  # Use curl with -L (follow redirects) and -b session (forward cookies)
-                  # urllib.request does not handle LAADS OAuth redirects correctly
+                  # Use wget — handles LAADS EDL OAuth redirect reliably
+                  # curl -b session requires a real cookie jar file; wget handles it natively
                   import subprocess
                   try:
                       result = subprocess.run([
-                          'curl', '--fail', '-sS', '-L', '-b', 'session',
-                          '-H', f'Authorization: Bearer {NASA_TOKEN}',
-                          '-o', str(h5_path), dl_url
+                          'wget', '-q', '--no-check-certificate',
+                          '--load-cookies', '/tmp/laads_cookies.txt',
+                          '--save-cookies', '/tmp/laads_cookies.txt',
+                          '--keep-session-cookies',
+                          '--header', f'Authorization: Bearer {NASA_TOKEN}',
+                          '-O', str(h5_path), dl_url
                       ], capture_output=True, timeout=300)
-                      if result.returncode != 0:
-                          raise RuntimeError(result.stderr.decode().strip())
-                      print(f'  ↓ {tile_id}: {h5_path.stat().st_size/1024/1024:.1f} MB')
+                      sz = h5_path.stat().st_size if h5_path.exists() else 0
+                      if sz < 1024 * 100:  # less than 100KB = almost certainly HTML error
+                          # Print first 200 bytes for diagnosis
+                          try:
+                              with open(h5_path,'rb') as dbg: snippet = dbg.read(200)
+                              print(f'  ✗ {tile_id} download: got {sz} bytes (expected >1MB) — {snippet[:100]}')
+                          except: pass
+                          h5_path.unlink(missing_ok=True); failed+=1; continue
+                      print(f'  ↓ {tile_id}: {sz/1024/1024:.1f} MB')
                   except Exception as e:
                       print(f'  ✗ {tile_id} download: {e}')
                       h5_path.unlink(missing_ok=True); failed+=1; continue
