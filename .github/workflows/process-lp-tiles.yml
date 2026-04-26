@@ -336,6 +336,26 @@ jobs:
               return buf.getvalue()
 
           # ── Main loop ─────────────────────────────────────────────────────
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+
+          UPLOAD_WORKERS = 16
+          BATCH_SIZE     = 64
+
+          def upload_batch(batch):
+              uploaded=0; total=0
+              def do_upload(item):
+                  key, data = item
+                  r2_upload(key, data)
+                  return len(data)
+              with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as ex:
+                  futs = {ex.submit(do_upload, item): item[0] for item in batch}
+                  for fut in as_completed(futs):
+                      try:
+                          total += fut.result(); uploaded += 1
+                      except Exception as e:
+                          print(f'    \u2717 upload {futs[fut]}: {e}')
+              return uploaded, total
+
           def deg2tx(lon, z): return int((lon+180)/360 * 2**z)
           def deg2ty(lat, z):
               lr = math.radians(lat); n = 2**z
@@ -352,15 +372,16 @@ jobs:
               tye = min(n-1, deg2ty(-85.05, zoom))
               tc  = (txe-txs+1)*(tye-tys+1)
               print(f'\nz{zoom}: x={txs}-{txe}, y={tys}-{tye} ({tc} tiles)')
+              batch = []
               for tx in range(txs, txe+1):
                   for ty in range(tys, tye+1):
                       png = generate_tile(tx, ty, zoom)
                       if png is None: skipped+=1; continue
-                      try:
-                          r2_upload(f'lp/{YEAR}/{zoom}/{tx}/{ty}.png', png)
-                          total_tiles+=1; total_bytes+=len(png)
-                      except Exception as e:
-                          print(f'    ✗ z{zoom}/{tx}/{ty}: {e}')
+                      batch.append((f'lp/{YEAR}/{zoom}/{tx}/{ty}.png', png))
+                      if len(batch) >= BATCH_SIZE:
+                          u,b = upload_batch(batch); total_tiles+=u; total_bytes+=b; batch=[]
+              if batch:
+                  u,b = upload_batch(batch); total_tiles+=u; total_bytes+=b
               print(f'  z{zoom} done — {total_tiles} uploaded, {skipped} skipped')
 
           print(f'\n{"="*60}')
@@ -567,6 +588,26 @@ jobs:
               buf = io.BytesIO(); img.save(buf,format='PNG',optimize=True)
               return buf.getvalue()
 
+          from concurrent.futures import ThreadPoolExecutor, as_completed
+
+          UPLOAD_WORKERS = 16
+          BATCH_SIZE     = 64
+
+          def upload_batch(batch):
+              uploaded=0; total=0
+              def do_upload(item):
+                  key, data = item
+                  r2_upload(key, data)
+                  return len(data)
+              with ThreadPoolExecutor(max_workers=UPLOAD_WORKERS) as ex:
+                  futs = {ex.submit(do_upload, item): item[0] for item in batch}
+                  for fut in as_completed(futs):
+                      try:
+                          total += fut.result(); uploaded += 1
+                      except Exception as e:
+                          print(f'    \u2717 upload {futs[fut]}: {e}')
+              return uploaded, total
+
           def deg2tx(lon,z): return int((lon+180)/360*2**z)
           def deg2ty(lat,z):
               lr=math.radians(lat); n=2**z
@@ -578,15 +619,16 @@ jobs:
               txs=max(0,deg2tx(LON_MIN,zoom)); txe=min(n-1,deg2tx(LON_MAX,zoom))
               tys=max(0,deg2ty(85.05,zoom));   tye=min(n-1,deg2ty(-85.05,zoom))
               print(f'\nz{zoom}: x={txs}-{txe}, y={tys}-{tye} ({(txe-txs+1)*(tye-tys+1)} tiles)')
+              batch=[]
               for tx in range(txs,txe+1):
                   for ty in range(tys,tye+1):
                       png=generate_tile(tx,ty,zoom)
                       if png is None: skipped+=1; continue
-                      try:
-                          r2_upload(f'lp/{YEAR}/{zoom}/{tx}/{ty}.png',png)
-                          total+=1; total_bytes+=len(png)
-                      except Exception as e:
-                          print(f'    ✗ z{zoom}/{tx}/{ty}: {e}')
+                      batch.append((f'lp/{YEAR}/{zoom}/{tx}/{ty}.png',png))
+                      if len(batch)>=BATCH_SIZE:
+                          u,b=upload_batch(batch); total+=u; total_bytes+=b; batch=[]
+              if batch:
+                  u,b=upload_batch(batch); total+=u; total_bytes+=b
               print(f'  z{zoom} done — {total} uploaded, {skipped} skipped')
           print(f'\n{"="*60}')
           print(f'  lon {LON_MIN}-{LON_MAX}: {total:,} tiles, {total_bytes/1024/1024:.1f} MB')
