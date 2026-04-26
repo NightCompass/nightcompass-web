@@ -1,0 +1,360 @@
+name: Process Light Pollution Tiles (VNP46A4)
+
+# ── Manual trigger only — this is a heavy one-time job ───────────────────────
+# Run once per year when NASA publishes the new annual composite.
+# ALWAYS run with test_mode=true first to verify storage estimates.
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: 'Year to process (e.g. 2023)'
+        required: true
+        default: '2023'
+        type: string
+      test_mode:
+        description: 'Test mode: process only v05 (40N-50N, 36 tiles). Run this first.'
+        required: false
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+permissions:
+  contents: read
+
+# ── Matrix strategy ───────────────────────────────────────────────────────────
+# Full mode:  6 parallel jobs covering v00-v17 (all 18 latitude bands)
+# Test mode:  1 job covering v05 only (40°N-50°N, 36 tiles, ~5 min)
+jobs:
+  process-tiles:
+    name: "v${{ matrix.v_start }}-v${{ matrix.v_end }}${{ inputs.test_mode == 'true' && ' [TEST]' || '' }}"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { v_start: 0,  v_end: 2,  test: false }
+          - { v_start: 3,  v_end: 5,  test: true  }
+          - { v_start: 6,  v_end: 8,  test: false }
+          - { v_start: 9,  v_end: 11, test: false }
+          - { v_start: 12, v_end: 14, test: false }
+          - { v_start: 15, v_end: 17, test: false }
+    # In test mode: only run the job where test=true (v03-v05)
+    # In full mode: run all jobs
+    if: ${{ inputs.test_mode == 'false' || matrix.test == true }}
+
+    steps:
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gdal-bin python3-gdal python3-pip libhdf5-dev curl
+          pip3 install h5py numpy Pillow requests --break-system-packages
+          echo "✓ Dependencies installed"
+
+      - name: Process VNP46A4 tiles
+        env:
+          NASA_TOKEN: ${{ secrets.NASA_BEARER_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          YEAR: ${{ inputs.year }}
+          V_START: ${{ matrix.v_start }}
+          V_END: ${{ matrix.v_end }}
+          TEST_MODE: ${{ inputs.test_mode }}
+        run: |
+          python3 - << 'PY'
+          import os, math, io, json, hmac, hashlib, datetime, urllib.request
+          import h5py, numpy as np
+          from PIL import Image
+          from pathlib import Path
+
+          NASA_TOKEN  = os.environ['NASA_TOKEN']
+          YEAR        = os.environ['YEAR']
+          V_START     = int(os.environ['V_START'])
+          V_END       = int(os.environ['V_END'])
+          TEST_MODE   = os.environ['TEST_MODE'] == 'true'
+          R2_KEY      = os.environ['R2_ACCESS_KEY_ID']
+          R2_SECRET   = os.environ['R2_SECRET_ACCESS_KEY']
+          R2_BUCKET   = os.environ['R2_BUCKET']
+          R2_ACCOUNT  = os.environ['R2_ACCOUNT_ID']
+
+          LAADS_BASE  = 'https://ladsweb.modaps.eosdis.nasa.gov'
+          COLLECTION  = '5200'
+          PRODUCT     = 'VNP46A4'
+          DAY         = '001'
+          ZOOM_MIN, ZOOM_MAX = 0, 8
+          TILE_SIZE   = 256
+
+          # In test mode: restrict to v05 only (within the v03-v05 job)
+          if TEST_MODE:
+              V_START = V_END = 5
+              print(f'=== TEST MODE: processing v05 only (lat 40N-50N) ===')
+          else:
+              print(f'=== FULL MODE: processing v{V_START:02d}-v{V_END:02d} ===')
+
+          # ── Bortle colour ramp ────────────────────────────────────────────
+          RAMP = [
+              (0.00,  (0,   0,   0,   0  )),
+              (0.01,  (0,   20,  60,  30 )),
+              (0.05,  (0,   40,  80,  60 )),
+              (0.15,  (0,   60,  100, 90 )),
+              (0.50,  (20,  80,  60,  120)),
+              (1.50,  (60,  100, 20,  150)),
+              (5.00,  (120, 100, 0,   180)),
+              (15.0,  (180, 80,  0,   200)),
+              (50.0,  (220, 40,  0,   220)),
+              (200.0, (255, 0,   0,   240)),
+          ]
+
+          def radiance_to_rgba(val):
+              if val <= 0 or np.isnan(val):
+                  return (0, 0, 0, 0)
+              for i in range(len(RAMP) - 1):
+                  lo_v, lo_c = RAMP[i]
+                  hi_v, hi_c = RAMP[i+1]
+                  if val <= hi_v:
+                      t = (val - lo_v) / (hi_v - lo_v)
+                      return tuple(int(lo_c[j] + t * (hi_c[j] - lo_c[j])) for j in range(4))
+              return RAMP[-1][1]
+
+          # ── Vectorised colour mapping (fast) ─────────────────────────────
+          def apply_ramp_vectorised(radiance):
+              """Apply Bortle ramp to entire 2D array at once — much faster than per-pixel."""
+              h, w = radiance.shape
+              rgba = np.zeros((h, w, 4), dtype=np.uint8)
+              for i in range(len(RAMP) - 1):
+                  lo_v, lo_c = RAMP[i]
+                  hi_v, hi_c = RAMP[i+1]
+                  mask = (radiance > lo_v) & (radiance <= hi_v)
+                  if not mask.any():
+                      continue
+                  t = np.where(mask, (radiance - lo_v) / (hi_v - lo_v), 0)
+                  for ch in range(4):
+                      rgba[:,:,ch] = np.where(mask,
+                          np.clip(lo_c[ch] + t * (hi_c[ch] - lo_c[ch]), 0, 255).astype(np.uint8),
+                          rgba[:,:,ch])
+              # Above-max values
+              mask_max = radiance > RAMP[-1][0]
+              if mask_max.any():
+                  for ch in range(4):
+                      rgba[:,:,ch] = np.where(mask_max, RAMP[-1][1][ch], rgba[:,:,ch])
+              return rgba
+
+          # ── R2 upload (S3 v4 signature) ───────────────────────────────────
+          def r2_upload(key, data, content_type='image/png'):
+              endpoint = f'https://{R2_ACCOUNT}.r2.cloudflarestorage.com'
+              host     = f'{R2_ACCOUNT}.r2.cloudflarestorage.com'
+              now      = datetime.datetime.utcnow()
+              date_s   = now.strftime('%Y%m%d')
+              ts       = now.strftime('%Y%m%dT%H%M%SZ')
+              ph       = hashlib.sha256(data).hexdigest()
+              hdrs     = {'content-type': content_type, 'host': host,
+                          'x-amz-content-sha256': ph, 'x-amz-date': ts}
+              ch       = ''.join(f'{k}:{v}\n' for k,v in sorted(hdrs.items()))
+              sh       = ';'.join(sorted(hdrs.keys()))
+              cr       = '\n'.join(['PUT', f'/{R2_BUCKET}/{key}', '', ch, sh, ph])
+              cs       = f'{date_s}/auto/s3/aws4_request'
+              sts      = '\n'.join(['AWS4-HMAC-SHA256', ts, cs,
+                                    hashlib.sha256(cr.encode()).hexdigest()])
+              def h256(k, m): return hmac.new(k, m.encode(), hashlib.sha256).digest()
+              sk  = h256(h256(h256(h256(f'AWS4{R2_SECRET}'.encode(), date_s),'auto'),'s3'),'aws4_request')
+              sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
+              auth = f'AWS4-HMAC-SHA256 Credential={R2_KEY}/{cs},SignedHeaders={sh},Signature={sig}'
+              req = urllib.request.Request(f'{endpoint}/{R2_BUCKET}/{key}', data=data, method='PUT')
+              for k,v in [('Authorization',auth),('Content-Type',content_type),
+                           ('x-amz-content-sha256',ph),('x-amz-date',ts)]:
+                  req.add_header(k, v)
+              with urllib.request.urlopen(req) as r: return r.status
+
+          # ── XYZ tile helpers ──────────────────────────────────────────────
+          def deg2num(lat, lon, z):
+              lr = math.radians(lat); n = 2**z
+              return (int((lon+180)/360*n),
+                      max(0, min(n-1, int((1-math.log(math.tan(lr)+1/math.cos(lr))/math.pi)/2*n))))
+
+          def tile_bbox(x, y, z):
+              n = 2**z
+              w =  x/n*360-180;  e = (x+1)/n*360-180
+              n_ = math.degrees(math.atan(math.sinh(math.pi*(1-2*y/n))))
+              s  = math.degrees(math.atan(math.sinh(math.pi*(1-2*(y+1)/n))))
+              return w, n_, e, s
+
+          def viirs_tile_bounds(h, v):
+              w = h*10-180; e = w+10; n = 90-v*10; s = n-10
+              return w, n, e, s
+
+          # ── Main loop ─────────────────────────────────────────────────────
+          tmp_dir = Path('/tmp/vnp46a4'); tmp_dir.mkdir(exist_ok=True)
+          processed = 0; failed = 0
+          total_bytes = 0; total_tiles = 0
+
+          for v in range(V_START, V_END + 1):
+              for h in range(36):
+                  tile_id = f'h{h:02d}v{v:02d}'
+
+                  # List directory to find exact filename
+                  list_url = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
+                              f'{PRODUCT}/{YEAR}/{DAY}/?fields=name')
+                  req = urllib.request.Request(list_url)
+                  req.add_header('Authorization', f'Bearer {NASA_TOKEN}')
+                  req.add_header('Accept', 'application/json')
+                  try:
+                      with urllib.request.urlopen(req, timeout=30) as r:
+                          files = json.loads(r.read())
+                      matches = [f['name'] for f in files if tile_id in f.get('name','')]
+                      if not matches:
+                          print(f'  skip {tile_id}: not in listing')
+                          continue
+                      filename = matches[0]
+                  except Exception as e:
+                      print(f'  ✗ {tile_id} listing: {e}')
+                      failed += 1; continue
+
+                  # Download HDF5
+                  h5_path = tmp_dir / filename
+                  dl_url  = (f'{LAADS_BASE}/archive/allData/{COLLECTION}/'
+                             f'{PRODUCT}/{YEAR}/{DAY}/{filename}')
+                  dl_req  = urllib.request.Request(dl_url)
+                  dl_req.add_header('Authorization', f'Bearer {NASA_TOKEN}')
+                  try:
+                      with urllib.request.urlopen(dl_req, timeout=180) as r, \
+                           open(h5_path, 'wb') as f:
+                          f.write(r.read())
+                      h5_size = h5_path.stat().st_size
+                      print(f'  ↓ {tile_id}: {h5_size/1024/1024:.1f} MB')
+                  except Exception as e:
+                      print(f'  ✗ {tile_id} download: {e}')
+                      failed += 1; continue
+
+                  # Extract radiance band
+                  try:
+                      with h5py.File(h5_path, 'r') as hf:
+                          grp = hf['HDFEOS/GRIDS/VNP_Grid_DNB/Data Fields']
+                          band = ('NearNadir_Composite_Snow_Free'
+                                  if 'NearNadir_Composite_Snow_Free' in grp
+                                  else 'AllAngle_Composite_Snow_Free')
+                          raw = grp[band][:]
+                          radiance = np.where(raw == 65535, np.nan, raw.astype(float) * 0.1)
+                  except Exception as e:
+                      print(f'  ✗ {tile_id} HDF5 read: {e}')
+                      h5_path.unlink(missing_ok=True); failed += 1; continue
+
+                  # Apply Bortle ramp (vectorised)
+                  rgba = apply_ramp_vectorised(radiance)
+                  src_img = Image.fromarray(rgba, 'RGBA')
+                  rows, cols = radiance.shape
+                  west, north, east, south = viirs_tile_bounds(h, v)
+
+                  # Slice into XYZ tiles and upload
+                  uploaded = 0; tile_bytes = 0
+                  for zoom in range(ZOOM_MIN, ZOOM_MAX + 1):
+                      x_min, y_min = deg2num(north, west, zoom)
+                      x_max, y_max = deg2num(south, east, zoom)
+                      n = 2**zoom
+                      x_min=max(0,x_min); x_max=min(n-1,x_max)
+                      y_min=max(0,y_min); y_max=min(n-1,y_max)
+
+                      for tx in range(x_min, x_max+1):
+                          for ty in range(y_min, y_max+1):
+                              tb_w, tb_n, tb_e, tb_s = tile_bbox(tx, ty, zoom)
+                              iw = east-west; ih = north-south
+                              cx0=int((tb_w-west)/iw*cols); cx1=int((tb_e-west)/iw*cols)
+                              cy0=int((north-tb_n)/ih*rows); cy1=int((north-tb_s)/ih*rows)
+                              cx0=max(0,min(cols,cx0)); cx1=max(0,min(cols,cx1))
+                              cy0=max(0,min(rows,cy0)); cy1=max(0,min(rows,cy1))
+                              if cx1<=cx0 or cy1<=cy0: continue
+
+                              crop = src_img.crop((cx0,cy0,cx1,cy1))
+                              tile_img = crop.resize((TILE_SIZE,TILE_SIZE), Image.LANCZOS)
+                              arr = np.array(tile_img)
+                              if arr[:,:,3].max() == 0: continue
+
+                              buf = io.BytesIO()
+                              tile_img.save(buf, format='PNG', optimize=True)
+                              png = buf.getvalue()
+
+                              r2_key = f'lp/{YEAR}/{zoom}/{tx}/{ty}.png'
+                              try:
+                                  r2_upload(r2_key, png)
+                                  uploaded += 1; tile_bytes += len(png)
+                              except Exception as e:
+                                  print(f'    ✗ {r2_key}: {e}')
+
+                  total_bytes += tile_bytes; total_tiles += uploaded
+                  print(f'  ✓ {tile_id}: {uploaded} tiles, {tile_bytes/1024:.0f} KB')
+                  processed += 1
+                  h5_path.unlink(missing_ok=True)
+
+          print(f'\n{"="*60}')
+          print(f'  v{V_START:02d}-v{V_END:02d} done: {processed} VIIRS tiles processed, {failed} failed')
+          print(f'  XYZ tiles uploaded: {total_tiles:,}')
+          print(f'  Total size: {total_bytes/1024/1024:.1f} MB')
+          if TEST_MODE and processed > 0:
+              # Extrapolate to full globe
+              # v05 covers 1/18 of latitude bands, but land coverage varies
+              # Conservative extrapolation: multiply by 18 (worst case)
+              est_full = total_bytes * 18 / 1024 / 1024
+              print(f'\n  STORAGE ESTIMATE (extrapolated to full globe):')
+              print(f'  ~{est_full:.0f} MB worst case (assumes uniform land coverage)')
+              print(f'  Actual will be less — polar/ocean tiles are skipped')
+              print(f'  R2 free tier: 10,240 MB — {"✓ OK" if est_full < 8192 else "⚠ check before full run"}')
+          PY
+
+      - name: Upload metadata
+        if: ${{ inputs.test_mode == 'false' && matrix.v_start == 0 }}
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET_NAME }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          YEAR: ${{ inputs.year }}
+        run: |
+          python3 - << 'PY'
+          import os, json, datetime, urllib.request, hmac, hashlib
+
+          R2_KEY     = os.environ['R2_ACCESS_KEY_ID']
+          R2_SECRET  = os.environ['R2_SECRET_ACCESS_KEY']
+          R2_BUCKET  = os.environ['R2_BUCKET']
+          R2_ACCOUNT = os.environ['R2_ACCOUNT_ID']
+          YEAR       = os.environ['YEAR']
+
+          meta = {
+              "source": "NASA VNP46A4 Black Marble",
+              "year": YEAR,
+              "collection": "5200",
+              "band": "NearNadir_Composite_Snow_Free",
+              "zoom_min": 0,
+              "zoom_max": 8,
+              "tile_size": 256,
+              "processed_utc": datetime.datetime.utcnow().isoformat(),
+              "tile_url_pattern": f"lp/{YEAR}/{{z}}/{{x}}/{{y}}.png",
+              "attribution": "NASA VNP46A4 Black Marble (LAADS DAAC)"
+          }
+          data = json.dumps(meta, indent=2).encode()
+
+          def r2_upload(key, data, ct='application/json'):
+              ep = f'https://{R2_ACCOUNT}.r2.cloudflarestorage.com'
+              host = f'{R2_ACCOUNT}.r2.cloudflarestorage.com'
+              now = datetime.datetime.utcnow()
+              ds = now.strftime('%Y%m%d'); ts = now.strftime('%Y%m%dT%H%M%SZ')
+              ph = hashlib.sha256(data).hexdigest()
+              hdrs = {'content-type':ct,'host':host,'x-amz-content-sha256':ph,'x-amz-date':ts}
+              ch = ''.join(f'{k}:{v}\n' for k,v in sorted(hdrs.items()))
+              sh = ';'.join(sorted(hdrs.keys()))
+              cr = '\n'.join(['PUT',f'/{R2_BUCKET}/{key}','',ch,sh,ph])
+              cs = f'{ds}/auto/s3/aws4_request'
+              sts = '\n'.join(['AWS4-HMAC-SHA256',ts,cs,hashlib.sha256(cr.encode()).hexdigest()])
+              def h256(k,m): return hmac.new(k,m.encode(),hashlib.sha256).digest()
+              sk = h256(h256(h256(h256(f'AWS4{R2_SECRET}'.encode(),ds),'auto'),'s3'),'aws4_request')
+              sig = hmac.new(sk,sts.encode(),hashlib.sha256).hexdigest()
+              auth = f'AWS4-HMAC-SHA256 Credential={R2_KEY}/{cs},SignedHeaders={sh},Signature={sig}'
+              req = urllib.request.Request(f'{ep}/{R2_BUCKET}/{key}',data=data,method='PUT')
+              for k,v in [('Authorization',auth),('Content-Type',ct),
+                           ('x-amz-content-sha256',ph),('x-amz-date',ts)]: req.add_header(k,v)
+              with urllib.request.urlopen(req) as r: return r.status
+
+          r2_upload(f'lp/{YEAR}/meta.json', data)
+          print(f'✓ meta.json uploaded for {YEAR}')
+          PY
