@@ -320,10 +320,14 @@ jobs:
               row_grid = np.clip(((90 - v_grid*10 - lat_grid) / 10 * 2400
                                   ).astype(np.int32), 0, 2399)
 
-              # Only sample pixels within our lon band — mask everything else
-              # This prevents downloading VIIRS files outside our region
-              # even when low-zoom tiles cover the full globe
-              lon_mask = (lon_grid >= LON_MIN - 0.1) & (lon_grid <= LON_MAX + 0.1)
+              # At zoom ≤ 4, tiles are coarse enough that every job fills the full
+              # tile independently — no lon_mask needed, last-write-wins is fine.
+              # At zoom ≥ 5, mask to our lon band (+2° overlap on each edge so
+              # boundary tiles are always fully filled by at least one job).
+              if zoom <= 4:
+                  lon_mask = np.ones((TILE_SIZE, TILE_SIZE), dtype=bool)
+              else:
+                  lon_mask = (lon_grid >= LON_MIN - 2.0) & (lon_grid <= LON_MAX + 2.0)
 
               radiance = np.full((TILE_SIZE, TILE_SIZE), np.nan, dtype=np.float32)
               hv_pairs = np.unique(
@@ -418,14 +422,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { lon_min: -180, lon_max: -135 }
-          - { lon_min: -135, lon_max:  -90 }
-          - { lon_min:  -90, lon_max:  -45 }
-          - { lon_min:  -45, lon_max:    0 }
-          - { lon_min:    0, lon_max:   45 }
-          - { lon_min:   45, lon_max:   90 }
-          - { lon_min:   90, lon_max:  135 }
-          - { lon_min:  135, lon_max:  180 }
+          - { lon_min: -180, lon_max: -133 }
+          - { lon_min: -137, lon_max:  -88 }
+          - { lon_min:  -92, lon_max:  -43 }
+          - { lon_min:  -47, lon_max:    2 }
+          - { lon_min:   -2, lon_max:   47 }
+          - { lon_min:   43, lon_max:   92 }
+          - { lon_min:   88, lon_max:  137 }
+          - { lon_min:  133, lon_max:  180 }
     steps:
       - name: Install dependencies
         run: |
@@ -596,7 +600,12 @@ jobs:
               v_g   = np.clip(((90-lat_g)/10).astype(np.int32),0,17)
               col_g = np.clip(((lon_g-(h_g*10-180))/10*2400).astype(np.int32),0,2399)
               row_g = np.clip(((90-v_g*10-lat_g)/10*2400).astype(np.int32),0,2399)
-              lon_mask = (lon_g >= LON_MIN - 0.1) & (lon_g <= LON_MAX + 0.1)
+              # At zoom ≤ 4 all jobs fill the full tile — no mask needed.
+              # At zoom ≥ 5 use 2° overlap so boundary tiles are always complete.
+              if zoom <= 4:
+                  lon_mask = np.ones((TILE_SIZE,TILE_SIZE),dtype=bool)
+              else:
+                  lon_mask = (lon_g >= LON_MIN - 2.0) & (lon_g <= LON_MAX + 2.0)
               rad   = np.full((TILE_SIZE,TILE_SIZE),np.nan,dtype=np.float32)
               for h,v in np.unique(np.stack([h_g[lon_mask].ravel(),v_g[lon_mask].ravel()],axis=1),axis=0):
                   src = load_viirs(int(h),int(v))
@@ -635,8 +644,9 @@ jobs:
               return max(0,min(n-1,int((1-math.log(math.tan(lr)+1/math.cos(lr))/math.pi)/2*n)))
 
           # ── Pre-download only the VIIRS files we need ─────────────────────
-          h_min = max(0,  int((LON_MIN + 180) / 10) - 1)
-          h_max = min(35, int((LON_MAX + 180) / 10) + 1)
+          # +2° overlap on each edge — extend h range by 1 extra on each side
+          h_min = max(0,  int((LON_MIN - 2.0 + 180) / 10) - 1)
+          h_max = min(35, int((LON_MAX + 2.0 + 180) / 10) + 1)
           print(f'Pre-downloading VIIRS h{h_min:02d}-h{h_max:02d} x v00-v17...')
           for v in range(18):
               for h in range(h_min, h_max+1):
@@ -647,7 +657,12 @@ jobs:
           total=0; skipped=0; total_bytes=0
           for zoom in range(ZOOM_MIN,ZOOM_MAX+1):
               n=2**zoom
-              txs=max(0,deg2tx(LON_MIN,zoom)); txe=min(n-1,deg2tx(LON_MAX,zoom))
+              # At zoom ≤ 4: full globe tiles, no lon clipping
+              # At zoom ≥ 5: expand tile range by 2° overlap on each edge
+              if zoom <= 4:
+                  txs=0; txe=n-1
+              else:
+                  txs=max(0,deg2tx(LON_MIN-2.0,zoom)); txe=min(n-1,deg2tx(LON_MAX+2.0,zoom))
               tys=max(0,deg2ty(85.05,zoom));   tye=min(n-1,deg2ty(-85.05,zoom))
               print(f'\nz{zoom}: x={txs}-{txe}, y={tys}-{tye} ({(txe-txs+1)*(tye-tys+1)} tiles)')
               batch=[]
