@@ -1572,98 +1572,133 @@ function probToRGBA(p, bands){
   return [band[1], band[2], band[3], band[4]];
 }
 
-// ── AURORA LAYER — world-space imageOverlay approach ──────────────────────────
-// Renders the aurora oval into a fixed 1440×720 world-space canvas (2px/degree),
-// then wraps it as L.imageOverlay covering [[-90,-180],[90,180]].
-// Leaflet composites it exactly like a tile layer — perfectly fluid on pan/zoom.
-// Only repaints when Kp or OVATION data actually changes.
-const AURORA_W = 1440, AURORA_H = 720; // 0.25° per pixel
-
-function _auroraRenderWorld(kp, ovation){
-  const bands = getAuroraPalette();
-  const cv = document.createElement('canvas');
-  cv.width = AURORA_W; cv.height = AURORA_H;
-  const ctx = cv.getContext('2d');
-  const img = ctx.createImageData(AURORA_W, AURORA_H);
-  const d = img.data;
-
-  if(ovation){
-    // Build lon→[{lat,prob}] lookup
-    const byLon = {};
-    for(const [lon, lat, prob] of ovation.coordinates){
-      if(prob < bands[0][0]) continue;
-      const key = Math.round(((lon % 360) + 360) % 360) - 180;
-      if(!byLon[key]) byLon[key] = [];
-      byLon[key].push({lat, prob});
-    }
-    for(let px = 0; px < AURORA_W; px++){
-      const lon = Math.round(px / AURORA_W * 360 - 180);
-      const entries = byLon[lon]; if(!entries) continue;
-      for(let py = 0; py < AURORA_H; py++){
-        const lat = 90 - py / AURORA_H * 180;
-        let best = null, bestDist = Infinity;
-        for(const e of entries){
-          const dist = Math.abs(e.lat - lat);
-          if(dist < bestDist){ bestDist = dist; best = e; }
-        }
-        if(!best || bestDist > 1.5 || best.prob < bands[0][0]) continue;
-        const col = probToRGBA(best.prob, bands); if(!col) continue;
-        const i = (py * AURORA_W + px) * 4;
-        d[i]=col[0]; d[i+1]=col[1]; d[i+2]=col[2]; d[i+3]=col[3];
-      }
-    }
-  } else {
-    for(let px = 0; px < AURORA_W; px++){
-      const lon = px / AURORA_W * 360 - 180;
-      for(let py = 0; py < AURORA_H; py++){
-        const lat = 90 - py / AURORA_H * 180;
-        const p = auroraProb(geomLat(lat, lon), kp);
-        if(p < bands[0][0]) continue;
-        const col = probToRGBA(p, bands); if(!col) continue;
-        const i = (py * AURORA_W + px) * 4;
-        d[i]=col[0]; d[i+1]=col[1]; d[i+2]=col[2]; d[i+3]=col[3];
-      }
-    }
-  }
-
-  ctx.putImageData(img, 0, 0);
-  // Soft blur to smooth pixel edges
-  const tmp = document.createElement('canvas');
-  tmp.width = AURORA_W; tmp.height = AURORA_H;
-  const tctx = tmp.getContext('2d');
-  tctx.filter = 'blur(3px)';
-  tctx.drawImage(cv, 0, 0);
-  return tmp.toDataURL();
-}
-
+// The custom Leaflet layer — redraws on every map change
 const AuroraLayer = L.Layer.extend({
   _kp: 3,
   _ovation: null,
-  _overlay: null,
-  initialize(kp){ this._kp = kp; },
+  initialize(kp){ this._kp=kp; },
   onAdd(map){
-    this._map = map;
-    this._render();
+    this._map=map;
+    this._canvas=document.createElement('canvas');
+    this._canvas.style.cssText='position:absolute;top:0;left:0;pointer-events:none;opacity:0;transition:opacity .8s;';
+    map.getPanes().overlayPane.appendChild(this._canvas);
+    this._size={x:0,y:0};
+    this._rafId=null;
+    map.on('moveend', this._onMoveEnd, this);
+    map.on('zoomend resize', this._redraw, this);
+    this._redraw();
+    setTimeout(()=>{ if(this._canvas) this._canvas.style.opacity='0.85'; },80);
   },
   onRemove(map){
-    if(this._overlay){ map.removeLayer(this._overlay); this._overlay = null; }
+    if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
+    map.off('moveend', this._onMoveEnd, this);
+    map.off('zoomend resize', this._redraw, this);
+    if(this._rafId) cancelAnimationFrame(this._rafId);
   },
-  setKp(kp){ this._kp = kp; this._ovation = null; this._render(); },
-  setOvation(data){ this._ovation = data; this._render(); },
-  _render(){
-    if(!this._map) return;
-    const url = _auroraRenderWorld(this._kp, this._ovation);
-    if(this._overlay){
-      this._overlay.setUrl(url);
+  setKp(kp){ this._kp=kp; this._ovation=null; this._redraw(); },
+  setOvation(data){ this._ovation=data; this._redraw(); },
+  // Pan end: just reposition canvas — don't resize, don't clear, just redraw content
+  _onMoveEnd(){
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+    // Only redraw if size changed (window resize during pan); otherwise just reposition
+    if(size.x===this._size.x && size.y===this._size.y){
+      if(this._rafId) cancelAnimationFrame(this._rafId);
+      this._rafId=requestAnimationFrame(()=>this._paint());
     } else {
-      this._overlay = L.imageOverlay(url,
-        [[-90,-180],[90,180]],
-        {opacity: 0, interactive: false}
-      ).addTo(this._map);
-      setTimeout(()=>{ if(this._overlay) this._overlay.setOpacity(0.85); }, 80);
+      this._redraw();
     }
   },
+  // Full redraw: resize canvas + repaint. Only on zoom/resize.
+  _redraw(){
+    if(!this._canvas||!this._map) return;
+    if(this._rafId) cancelAnimationFrame(this._rafId);
+    this._rafId=requestAnimationFrame(()=>{
+      if(!this._canvas||!this._map) return;
+      const map=this._map, size=map.getSize();
+      if(!size.x||!size.y) return;
+      this._canvas.width=size.x; this._canvas.height=size.y;
+      this._size={x:size.x,y:size.y};
+      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      this._paint();
+    });
+  },
+  _paint(){
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    const ctx=this._canvas.getContext('2d');
+    ctx.clearRect(0,0,size.x,size.y);
+    if(this._ovation) this._drawOvation(ctx,map,size);
+    else this._drawModelled(ctx,map,size);
+  },
+  _drawModelled(ctx, map, size){
+    const kp=this._kp, bands=getAuroraPalette();
+    const step=Math.max(2, Math.round(6/map.getZoom()));
+    for(let px=0;px<size.x;px+=step){
+      for(let py=0;py<size.y;py+=step){
+        const ll=map.containerPointToLatLng([px+step/2,py+step/2]);
+        const p=auroraProb(geomLat(ll.lat,ll.lng), kp);
+        if(p<bands[0][0]) continue;
+        const col=probToRGBA(p,bands); if(!col) continue;
+        ctx.fillStyle=`rgba(${col[0]},${col[1]},${col[2]},${(col[3]/255).toFixed(2)})`;
+        ctx.fillRect(px,py,step,step);
+      }
+    }
+    // Minimal blur — just enough to soften pixel edges, preserve band distinction
+    const tmp=document.createElement('canvas'); tmp.width=size.x; tmp.height=size.y;
+    const tctx=tmp.getContext('2d'); tctx.filter='blur(2px)'; tctx.drawImage(this._canvas,0,0);
+    ctx.clearRect(0,0,size.x,size.y); ctx.drawImage(tmp,0,0);
+  },
+  _drawOvation(ctx, map, size){
+    const bands = getAuroraPalette();
+    const coords = this._ovation.coordinates;
 
+    // Build a fast lookup: for each integer lon (-180..179), store array of {lat, prob}
+    // so we can query by longitude in O(1) during pixel sampling.
+    const byLon = {};
+    for(const [lon, lat, prob] of coords){
+      if(prob < bands[0][0]) continue;
+      const key = Math.round(((lon % 360) + 360) % 360) - 180; // normalise to -180..179
+      if(!byLon[key]) byLon[key] = [];
+      byLon[key].push({lat, prob});
+    }
+
+    // Sample every pixel like _drawModelled — inherently handles infinite world wrap
+    const step = Math.max(2, Math.round(6 / map.getZoom()));
+    for(let px = 0; px < size.x; px += step){
+      for(let py = 0; py < size.y; py += step){
+        const ll  = map.containerPointToLatLng([px + step/2, py + step/2]);
+        const lat = ll.lat;
+        // Normalise longitude to -180..179 to match OVATION data range
+        const lon = Math.round(((ll.lng % 360) + 360) % 360) - 180;
+
+        // Find best matching OVATION entry at this longitude
+        const entries = byLon[lon];
+        if(!entries) continue;
+        // Pick the entry whose latitude is closest to the screen pixel's latitude
+        let best = null, bestDist = Infinity;
+        for(const e of entries){
+          const d = Math.abs(e.lat - lat);
+          if(d < bestDist){ bestDist = d; best = e; }
+        }
+        if(!best || bestDist > 1.5 || best.prob < bands[0][0]) continue;
+
+        const col = probToRGBA(best.prob, bands);
+        if(!col) continue;
+        ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${(col[3]/255).toFixed(2)})`;
+        ctx.fillRect(px, py, step, step);
+      }
+    }
+    // Same minimal blur as modelled layer for visual consistency
+    const tmp = document.createElement('canvas');
+    tmp.width = size.x; tmp.height = size.y;
+    const tctx = tmp.getContext('2d');
+    tctx.filter = 'blur(2px)';
+    tctx.drawImage(this._canvas, 0, 0);
+    ctx.clearRect(0, 0, size.x, size.y);
+    ctx.drawImage(tmp, 0, 0);
+  }
 });
 
 function drawAuroraLayer(kp){
@@ -1930,65 +1965,106 @@ function solarElevAngle(latDeg, lonDeg, sunLat, sunLon){
 // ── DAY / NIGHT — canvas Leaflet layer ───────────────────────────────────────
 // Draws per-pixel solar elevation → smooth opacity like the reference image.
 // Redraws on every map move/zoom so it follows world wrap perfectly.
-// ── DAY/NIGHT LAYER — world-space imageOverlay approach ───────────────────────
-// Renders the terminator into a 1440×720 equirectangular canvas (0.25°/px),
-// wraps as L.imageOverlay covering [[-90,-180],[90,180]].
-// Perfectly fluid on pan/zoom — only recomputes every 60s via the existing timer.
-const DN_W = 1440, DN_H = 720;
-
-function _dayNightRenderWorld(date){
-  const {lat: sunLat, lon: sunLon} = solarSubpoint(date);
-  const cv = document.createElement('canvas');
-  cv.width = DN_W; cv.height = DN_H;
-  const ctx = cv.getContext('2d');
-  const img = ctx.createImageData(DN_W, DN_H);
-  const d = img.data;
-
-  for(let px = 0; px < DN_W; px++){
-    const lon = px / DN_W * 360 - 180;
-    for(let py = 0; py < DN_H; py++){
-      const lat  = 90 - py / DN_H * 180;
-      const elev = solarElevAngle(lat, lon, sunLat, sunLon);
-
-      let alpha = 0;
-      if     (elev <= -18) alpha = 0.68;
-      else if(elev <  -12) alpha = 0.58 + 0.10 * (-12 - elev) / 6;
-      else if(elev <   -6) alpha = 0.38 + 0.20 * (-6  - elev) / 6;
-      else if(elev <    0) alpha = 0.10 + 0.28 * (0   - elev) / 6;
-      else if(elev <    3) alpha = 0.10 * (3 - elev) / 3;
-
-      if(alpha < 0.01) continue;
-      const i = (py * DN_W + px) * 4;
-      d[i]=15; d[i+1]=28; d[i+2]=64; d[i+3]=Math.round(alpha*255);
-    }
-  }
-  ctx.putImageData(img, 0, 0);
-  return cv.toDataURL();
-}
-
 const DayNightLayer = L.Layer.extend({
   _date: null,
-  _overlay: null,
   initialize(date){ this._date = date || new Date(); },
   onAdd(map){
     this._map = map;
-    this._render();
+    this._canvas = document.createElement('canvas');
+    this._canvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;';
+    map.getPanes().overlayPane.appendChild(this._canvas);
+    this._size={x:0,y:0};
+    this._rafId=null;
+    map.on('moveend', this._onMoveEnd, this);
+    map.on('zoomend resize', this._redraw, this);
+    this._redraw();
   },
   onRemove(map){
-    if(this._overlay){ map.removeLayer(this._overlay); this._overlay = null; }
+    if(this._canvas){ map.getPanes().overlayPane.removeChild(this._canvas); this._canvas=null; }
+    map.off('moveend', this._onMoveEnd, this);
+    map.off('zoomend resize', this._redraw, this);
+    if(this._rafId) cancelAnimationFrame(this._rafId);
   },
-  setDate(date){ this._date = date; this._render(); },
-  _render(){
-    if(!this._map) return;
-    const url = _dayNightRenderWorld(this._date);
-    if(this._overlay){
-      this._overlay.setUrl(url);
+  setDate(date){ this._date = date; this._redraw(); },
+  _onMoveEnd(){
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+    if(size.x===this._size.x && size.y===this._size.y){
+      if(this._rafId) cancelAnimationFrame(this._rafId);
+      this._rafId=requestAnimationFrame(()=>this._paint());
     } else {
-      this._overlay = L.imageOverlay(url,
-        [[-90,-180],[90,180]],
-        {opacity: 1, interactive: false}
-      ).addTo(this._map);
+      this._redraw();
     }
+  },
+  _redraw(){
+    if(!this._canvas || !this._map) return;
+    if(this._rafId) cancelAnimationFrame(this._rafId);
+    this._rafId=requestAnimationFrame(()=>{
+      if(!this._canvas||!this._map) return;
+      const map  = this._map;
+      const size = map.getSize();
+      if(!size.x || !size.y) return;
+      this._canvas.width  = size.x;
+      this._canvas.height = size.y;
+      this._size={x:size.x,y:size.y};
+      L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0,0]));
+      this._paint();
+    });
+  },
+  _paint(){
+    if(!this._canvas||!this._map) return;
+    const map=this._map, size=map.getSize();
+    const ctx = this._canvas.getContext('2d');
+    ctx.clearRect(0, 0, size.x, size.y);
+
+    const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
+
+    // Step 4px — good balance of speed and smoothness
+    const step = 4;
+    const imgData = ctx.createImageData(size.x, size.y);
+
+    for(let px = 0; px < size.x; px += step){
+      for(let py = 0; py < size.y; py += step){
+        const ll   = map.containerPointToLatLng([px + step/2, py + step/2]);
+        const elev = solarElevAngle(ll.lat, ll.lng, sunLat, sunLon);
+
+        // Opacity curve — harder transitions, closer to reference image:
+        // full day (elev > 3°)    → 0   (transparent)
+        // golden hour (0–3°)      → 0–0.10 (subtle warm edge on day side)
+        // blue hour / civil (-6°) → 0.10–0.38 (steeper ramp)
+        // nautical twilight (-12°)→ 0.38–0.58
+        // astronomical (-18°)     → 0.58–0.68
+        // deep night (< -18°)     → 0.68 (uniform dark)
+        let alpha = 0;
+        if(elev <= -18){
+          alpha = 0.68;
+        } else if(elev < -12){
+          alpha = 0.58 + 0.10 * (-12 - elev) / 6;
+        } else if(elev < -6){
+          alpha = 0.38 + 0.20 * (-6  - elev) / 6;
+        } else if(elev < 0){
+          alpha = 0.10 + 0.28 * (0   - elev) / 6;
+        } else if(elev < 3){
+          alpha = 0.10 * (3 - elev) / 3;
+        }
+
+        if(alpha < 0.01) continue;
+
+        // Night colour: deep blue-navy (matches reference)
+        const a255 = Math.round(alpha * 255);
+        for(let dx = 0; dx < step && px+dx < size.x; dx++){
+          for(let dy = 0; dy < step && py+dy < size.y; dy++){
+            const i = ((py+dy)*size.x + (px+dx)) * 4;
+            imgData.data[i]   = 15;   // R
+            imgData.data[i+1] = 28;   // G
+            imgData.data[i+2] = 64;   // B
+            imgData.data[i+3] = a255;
+          }
+        }
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
   }
 });
 
@@ -2133,7 +2209,6 @@ const PinLayer = L.Layer.extend({
     this._popupMarkers.forEach(m=>{ if(this._map) this._map.removeLayer(m); });
     this._popupMarkers = [];
   },
-  // Full redraw: resize canvas then paint. Only on zoom/resize/data change.
   _redraw(){
     if(!this._canvas||!this._map) return;
     const map=this._map, size=map.getSize();
