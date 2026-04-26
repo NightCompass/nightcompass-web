@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.88</title>
+<title>NightCompass v0.89</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.88</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.89</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -679,7 +679,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
           <option value="2019">2019</option>
         </select>
       </div>
-      <div class="lp-ctrl-attr">NASA VIIRS ENCC · Bortle scale · dated composite</div>
+      <div class="lp-ctrl-attr">NASA Black Marble VNP46A4 · Bortle scale · annual composite</div>
       <!-- Bortle colour legend -->
       <div style="display:flex;gap:2px;margin-top:4px;align-items:center;">
         <div style="flex:1;height:8px;background:linear-gradient(to right,#000050,#001e96,#007850,#009600,#8ca000,#dc640a,#f02800,#f00000,#ffffff);border-radius:3px;"></div>
@@ -2102,7 +2102,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.88 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.89 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2350,134 +2350,24 @@ function updateLatLabels(){
 function addLpLayer(){
   if(lpTileLayer) ncMap.removeLayer(lpTileLayer);
 
-  // NASA GIBS VIIRS SNPP Day/Night Band ENCC — the confirmed working WMTS layer.
-  // We request a specific date so GIBS returns the cleanest available composite
-  // for that period rather than an arbitrary recent night with cloud holes.
-  // lpYear drives the date; GIBS will serve the best available tile for that year.
-  const dateStr = `${lpYear}-01-01`;
-  const VIIRS_URL =
-    'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/' +
-    `VIIRS_SNPP_DayNightBand_ENCC/default/${dateStr}/GoogleMapsCompatible_Level8/{z}/{y}/{x}.png`;
+  // NASA VNP46A4 Black Marble annual composite — pre-processed to XYZ PNG tiles
+  // with Bortle colour ramp applied server-side. Served from Cloudflare R2.
+  // Tiles only exist where there is light pollution data (land areas).
+  // Transparent PNG returned for ocean / no-data tiles automatically.
+  const R2_LP_URL = `https://pub-45b1adc1c08d4256907de67b56bcc57d.r2.dev/lp/${lpYear}/{z}/{x}/{y}.png`;
 
-  // Bortle colour ramp: pixel luminance 0–255 → Bortle sky quality colour
-  // Matches the standard light pollution colour scale used by astronomers
-  const RAMP = [
-    [0,  0,  0,  0  ],  // transparent — no light
-    [10, 0,  0,  80 ],  // B1 — pristine (deep indigo)
-    [30, 0,  30, 150],  // B2 — truly dark (blue)
-    [60, 0,  120,80 ],  // B3 — rural (teal)
-    [100,0,  160,0  ],  // B4 — rural/suburban (green)
-    [140,140,160,0  ],  // B5 — suburban (yellow-green)
-    [180,220,100,0  ],  // B6 — bright suburban (orange-yellow)
-    [210,240,40, 0  ],  // B7 — urban (orange)
-    [235,240,0,  0  ],  // B8 — city (red)
-    [255,255,255,255],  // B9 — inner city (white)
-  ];
-
-  function bortleRGBA(lum){
-    if(lum < 8) return [0,0,0,0];
-    for(let i=1;i<RAMP.length;i++){
-      if(lum<=RAMP[i][0]){
-        const lo=RAMP[i-1],hi=RAMP[i];
-        const t=(lum-lo[0])/(hi[0]-lo[0]);
-        return [
-          Math.round(lo[1]+t*(hi[1]-lo[1])),
-          Math.round(lo[2]+t*(hi[2]-lo[2])),
-          Math.round(lo[3]+t*(hi[3]-lo[3])),
-          Math.min(255,Math.round(30+lum*0.88)),
-        ];
-      }
-    }
-    return [255,255,255,220];
-  }
-
-  // Custom GridLayer — fetches VIIRS grayscale tiles, recolours each pixel
-  const VIIRSHeatmap = L.GridLayer.extend({
-    createTile(coords, done){
-      const tile = document.createElement('canvas');
-      tile.width = tile.height = 256;
-      const ctx  = tile.getContext('2d', {willReadFrequently:true});
-      const img  = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0, 256, 256);
-        const id  = ctx.getImageData(0, 0, 256, 256);
-        const d   = id.data;
-        const W   = 256;
-
-        // ── CLOUD SUPPRESSION FILTER ──────────────────────────────────────
-        // Moonlit clouds produce large uniform mid-luminance regions.
-        // City lights produce tight high-contrast clusters.
-        // Strategy: for each pixel, measure local variance across its 8 neighbours.
-        // Low variance + mid luminance → likely cloud → suppress.
-        // High luminance (>145) → genuine city, always pass through.
-
-        // Step 1: extract raw luminance plane (R channel — ENCC is greyscale)
-        const lum = new Uint8Array(W * W);
-        for(let i = 0; i < W * W; i++) lum[i] = d[i * 4];
-
-        // Step 2: compute per-pixel cloud score, build suppressed lum array
-        const out = new Uint8Array(W * W);
-        for(let y = 0; y < W; y++){
-          for(let x = 0; x < W; x++){
-            const idx = y * W + x;
-            const v   = lum[idx];
-
-            // Hard city threshold — always keep, no filtering
-            if(v > 145){ out[idx] = v; continue; }
-            // Below noise floor — always discard
-            if(v < 8){ out[idx] = 0; continue; }
-
-            // Gather 3×3 neighbourhood (clamp at tile borders)
-            let sum = 0, sum2 = 0, n = 0;
-            for(let dy = -1; dy <= 1; dy++){
-              for(let dx = -1; dx <= 1; dx++){
-                const ny = Math.min(W-1, Math.max(0, y+dy));
-                const nx = Math.min(W-1, Math.max(0, x+dx));
-                const nv = lum[ny * W + nx];
-                sum  += nv;
-                sum2 += nv * nv;
-                n++;
-              }
-            }
-            const mean     = sum / n;
-            const variance = sum2 / n - mean * mean;
-
-            // Low-variance mid-luminance → cloud signature → graduated suppression
-            // Variance threshold: real city edges typically >300, clouds <80
-            if(variance < 90 && v < 110){
-              const cloudiness = (1 - variance / 90) * (1 - v / 110);
-              out[idx] = Math.round(v * (1 - cloudiness * 0.92));
-            } else {
-              out[idx] = v;
-            }
-          }
-        }
-
-        // Step 3: apply Bortle colour ramp to filtered luminance
-        for(let i = 0; i < W * W; i++){
-          const [r,g,b,a] = bortleRGBA(out[i]);
-          d[i*4]=r; d[i*4+1]=g; d[i*4+2]=b; d[i*4+3]=a;
-        }
-        ctx.putImageData(id, 0, 0);
-        done(null, tile);
-      };
-      img.onerror = () => done(null, tile); // transparent on error
-      img.src = L.Util.template(VIIRS_URL, {z:coords.z, y:coords.y, x:coords.x});
-      return tile;
-    },
-  });
-
-  lpTileLayer = new VIIRSHeatmap({
-    maxZoom:     8,
-    opacity:     lpOpacity,
-    zIndex:      5,
-    attribution: 'Light pollution: <a href="https://earthdata.nasa.gov" target="_blank" rel="noopener noreferrer">NASA VIIRS · Bortle heatmap</a>',
+  lpTileLayer = L.tileLayer(R2_LP_URL, {
+    maxZoom:       8,
+    minZoom:       0,
+    opacity:       lpOpacity,
+    zIndex:        5,
+    errorTileUrl:  '', // silent on missing tiles (ocean, Antarctica)
+    attribution:   'Light pollution: <a href="https://earthdata.nasa.gov" target="_blank" rel="noopener noreferrer">NASA Black Marble VNP46A4 · Bortle scale</a>',
   });
   lpTileLayer.addTo(ncMap);
 
   const dbg = document.getElementById('lpDebug');
-  if(dbg) dbg.textContent = `✓ VIIRS ENCC ${lpYear} · Bortle heatmap`;
+  if(dbg) dbg.textContent = `✓ NASA Black Marble ${lpYear} · Bortle scale`;
 }
 
 function removeLpLayer(){
@@ -2607,7 +2497,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.88 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.89 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -3593,7 +3483,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.88';
+  document.title = ORIG_TITLE || 'NightCompass v0.89';
   kpAlertActive = false;
 }
 
@@ -4878,7 +4768,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.88</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.89</div>
   </div>
 </div>
 </body>
