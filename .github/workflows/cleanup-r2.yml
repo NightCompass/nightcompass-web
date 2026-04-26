@@ -63,12 +63,17 @@ jobs:
               return hdrs
 
           def list_keys(prefix, token=None):
-              params = {'list-type':'2','prefix':prefix,'max-keys':'1000'}
+              # S3 v4 signing requires query params sorted alphabetically
+              params = {'list-type':'2','max-keys':'1000','prefix':prefix}
               if token: params['continuation-token'] = token
-              q    = urllib.parse.urlencode(params)
+              # Sort and encode — keys must be percent-encoded, values too
+              q = '&'.join(f'{urllib.parse.quote(k,safe="")}={urllib.parse.quote(str(v),safe="")}'
+                           for k,v in sorted(params.items()))
               hdrs = aws_headers('GET', f'/{R2_BUCKET}', q)
               req  = urllib.request.Request(f'{ENDPOINT}/{R2_BUCKET}?{q}', headers=hdrs)
-              with urllib.request.urlopen(req) as r: root = ET.fromstring(r.read())
+              with urllib.request.urlopen(req) as r:
+                  body = r.read()
+              root = ET.fromstring(body)
               ns   = {'s3':'http://s3.amazonaws.com/doc/2006-03-01/'}
               keys = [el.text for el in root.findall('.//s3:Key', ns)]
               nxt  = root.find('s3:NextContinuationToken', ns)
@@ -126,6 +131,7 @@ jobs:
           except Exception as e:
               print(f'✗ Error: {e}')
               raise
+          PY
 
   skip:
     name: "Skipped — confirm field was not DELETE"
