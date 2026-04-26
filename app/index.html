@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.98</title>
+<title>NightCompass v0.99</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.98</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.99</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1576,6 +1576,7 @@ self.onmessage = function(e){
     for(let px=0; px<width; px+=step){
       const wx = originX + px + step/2;
       const lon_raw = wx/worldPx*360-180;
+      if(lon_raw < -180 || lon_raw > 180) continue; // outside single-world bounds
       for(let py=0; py<height; py+=step){
         const wy = originY + py + step/2;
         const n  = Math.PI - 2*Math.PI*wy/worldPx;
@@ -1614,6 +1615,7 @@ self.onmessage = function(e){
     for(let px=0; px<width; px+=step){
       const wx = originX + px + step/2;
       const lon = wx/worldPx*360-180;
+      if(lon < -180 || lon > 180) continue; // outside single-world bounds
       for(let py=0; py<height; py+=step){
         const wy = originY + py + step/2;
         const n  = Math.PI - 2*Math.PI*wy/worldPx;
@@ -1962,8 +1964,9 @@ function updateMapTiles(){
 function initMap(){
   ncMap=L.map('map',{
     center:[20,0], zoom:2, zoomControl:false, minZoom:2,
-    maxBounds:[[-90,-Infinity],[90,Infinity]],
-    maxBoundsViscosity:1.0  // hard stop — no elastic bounce past the poles
+    maxBounds:[[-90,-180],[90,180]],  // single world — no infinite horizontal scroll
+    maxBoundsViscosity:1.0,           // hard stop at all edges
+    worldCopyJump: false              // disable world-copy repetition
   });
 
   if(typeof L.maplibreGL === 'function'){
@@ -2111,7 +2114,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.98 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.99 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2229,17 +2232,11 @@ const PinLayer = L.Layer.extend({
     ctx.clearRect(0,0,size.x,size.y);
     if(!layers.pins) return;
 
-    // Full-world width in screen pixels at current zoom
-    const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
-
+    // Single world — draw each pin at its direct screen position only
     savedLocs.forEach(loc=>{
       const sc=visScore(this._kp,loc), col=sc>65?'#00ffa3':sc>35?'#facc15':'#f97316';
       const pt = map.latLngToContainerPoint([loc.lat, loc.lon]);
-      // Step through all world copies visible on screen (and one beyond each edge)
-      for(let wx = pt.x - Math.ceil((pt.x + size.x) / worldPx) * worldPx;
-              wx < size.x + worldPx; wx += worldPx){
-        this._drawPin(ctx, wx, pt.y, col, loc.name===activeLoc?.name);
-      }
+      this._drawPin(ctx, pt.x, pt.y, col, loc.name===activeLoc?.name);
     });
   },
   _drawPin(ctx, x, y, col, isActive){
@@ -2262,16 +2259,12 @@ const PinLayer = L.Layer.extend({
     const map=this._map, size=map.getSize();
     const rect=this._hitDiv.getBoundingClientRect();
     const cx=e.clientX-rect.left, cy=e.clientY-rect.top;
-    const worldPx = map.project([0,180]).x - map.project([0,-180]).x;
     let best=null, bestDist=Infinity;
     savedLocs.forEach((loc,i)=>{
       const pt=map.latLngToContainerPoint([loc.lat,loc.lon]);
-      for(let wx = pt.x - Math.ceil((pt.x + size.x) / worldPx) * worldPx;
-              wx < size.x + worldPx; wx += worldPx){
-        const dx=cx-wx, dy=cy-pt.y;
-        const d=Math.sqrt(dx*dx+dy*dy);
-        if(d<16&&d<bestDist){ bestDist=d; best=i; }
-      }
+      const dx=cx-pt.x, dy=cy-pt.y;
+      const d=Math.sqrt(dx*dx+dy*dy);
+      if(d<16&&d<bestDist){ bestDist=d; best=i; }
     });
     if(best!==null){
       const m=this._popupMarkers[best];
@@ -2507,7 +2500,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.98 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.99 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -3493,7 +3486,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.98';
+  document.title = ORIG_TITLE || 'NightCompass v0.99';
   kpAlertActive = false;
 }
 
@@ -4778,7 +4771,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.98</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.99</div>
   </div>
 </div>
 </body>
