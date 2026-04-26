@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.101</title>
+<title>NightCompass v0.102</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.101</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.102</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -1744,14 +1744,14 @@ const AuroraLayer = L.Layer.extend({
     const size = map.getSize();
     if(!size.x || !size.y) return;
 
-    // map.project(NW corner) gives the world-pixel of the canvas top-left
-    // correctly regardless of overlay pane transform state.
     const zoom    = map.getZoom();
     const worldPx = Math.pow(2, zoom) * 256;
-    const nw      = map.getBounds().getNorthWest();
-    const nwPx    = map.project(nw, zoom);
-    const originX = nwPx.x;
-    const originY = nwPx.y;
+    // containerPointToLatLng([0,0]) → exact geographic NW of visible canvas.
+    // project(..., zoom) → world-pixel coords the worker needs.
+    const nwLatLng = map.containerPointToLatLng(L.point(0, 0));
+    const nwPx     = map.project(nwLatLng, zoom);
+    const originX  = nwPx.x;
+    const originY  = nwPx.y;
     const w = size.x, h = size.y;
 
     const seq = ++this._renderSeq;
@@ -2061,10 +2061,10 @@ const DayNightLayer = L.Layer.extend({
 
     const zoom    = map.getZoom();
     const worldPx = Math.pow(2, zoom) * 256;
-    const nw      = map.getBounds().getNorthWest();
-    const nwPx    = map.project(nw, zoom);
-    const originX = nwPx.x;
-    const originY = nwPx.y;
+    const nwLatLng = map.containerPointToLatLng(L.point(0, 0));
+    const nwPx     = map.project(nwLatLng, zoom);
+    const originX  = nwPx.x;
+    const originY  = nwPx.y;
     const w = size.x, h = size.y;
     const {lat: sunLat, lon: sunLon} = solarSubpoint(this._date);
 
@@ -2117,7 +2117,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.101 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.102 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2503,7 +2503,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.101 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.102 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -2997,12 +2997,12 @@ function renderForecastData(d, fcRows){
   // ── Cloud bars — window: 12h past → NOW → 36h future (48 total) ──────────────
   const allCloudCover = d.hourly.cloudcover || [];
   const allCloudTimes = d.hourly.time       || [];
-  // Compare in plain UTC — omDate() returns UTC Date, Date.now() is UTC ms.
-  // No offset shift needed; Open-Meteo timestamps are UTC unix seconds.
-  const utcNowMs = Date.now();
+  // Open-Meteo unixtime with timezone=auto is local-shifted:
+  // Montreal 14:00 local is stored as unix 14:00 UTC equivalent.
+  // Must compare against localNowMs() which applies the same shift to Date.now().
+  const locNowMs2 = localNowMs(d.utc_offset_seconds);
 
-  // Find the first hourly slot whose UTC time >= now
-  let nowHourIdx = allCloudTimes.findIndex(ts => omDate(ts).getTime() >= utcNowMs);
+  let nowHourIdx = allCloudTimes.findIndex(ts => omDate(ts).getTime() >= locNowMs2);
   if(nowHourIdx < 0) nowHourIdx = allCloudTimes.length - 1;
 
   const C_PAST   = 12;
@@ -3491,7 +3491,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.101';
+  document.title = ORIG_TITLE || 'NightCompass v0.102';
   kpAlertActive = false;
 }
 
@@ -4776,7 +4776,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.101</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.102</div>
   </div>
 </div>
 </body>
