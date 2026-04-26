@@ -33,6 +33,7 @@ jobs:
         run: |
           python3 - << 'PY'
           import os, hmac, hashlib, datetime, urllib.request, urllib.parse
+          import xml.etree.ElementTree as ET
 
           R2_KEY     = os.environ['R2_ACCESS_KEY_ID']
           R2_SECRET  = os.environ['R2_SECRET_ACCESS_KEY']
