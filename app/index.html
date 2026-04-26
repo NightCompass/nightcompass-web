@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧭</text></svg>"><!-- frame-ancestors requires HTTP header, not meta tag — set at CDN/server level -->
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NightCompass v0.89</title>
+<title>NightCompass v0.90</title>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 
 <!-- Leaflet 1.9.4 — unpkg · SRI hashes from official leafletjs.com/download.html -->
@@ -567,7 +567,7 @@ header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-be
       <path d="M14 2 L16 10 L14 11.5 L12 10 Z" fill="#00ffa3" opacity=".8"/>
     </svg>
     <span class="lt">Night<span>Compass</span></span>
-    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.89</span>
+    <span style="font-size:8px;color:var(--muted);letter-spacing:.5px;margin-left:2px;align-self:flex-end;padding-bottom:3px">v0.90</span>
   </div>
   <div class="hstat">
     <div class="ldot"></div>
@@ -2102,7 +2102,7 @@ async function detectUserLocation(){
       try{
         const r = await fetch(
           `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&zoom=10`,
-          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.89 (nightcompass.net)'},
+          {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.90 (nightcompass.net)'},
            signal:AbortSignal.timeout(5000)}
         );
         const d = await r.json();
@@ -2357,12 +2357,15 @@ function addLpLayer(){
   const R2_LP_URL = `https://pub-45b1adc1c08d4256907de67b56bcc57d.r2.dev/lp/${lpYear}/{z}/{x}/{y}.png`;
 
   lpTileLayer = L.tileLayer(R2_LP_URL, {
-    maxZoom:       8,
-    minZoom:       0,
-    opacity:       lpOpacity,
-    zIndex:        5,
-    errorTileUrl:  '', // silent on missing tiles (ocean, Antarctica)
-    attribution:   'Light pollution: <a href="https://earthdata.nasa.gov" target="_blank" rel="noopener noreferrer">NASA Black Marble VNP46A4 · Bortle scale</a>',
+    maxZoom:          8,
+    minZoom:          0,
+    opacity:          lpOpacity,
+    zIndex:           5,
+    keepBuffer:       4,       // pre-load extra tiles around viewport
+    updateWhenZooming: false,  // don't show scaled tiles during zoom — wait for real ones
+    updateWhenIdle:   false,   // load tiles continuously, not just after pan stops
+    errorTileUrl:     '',      // silent on missing tiles (ocean, Antarctica)
+    attribution:      'Light pollution: <a href="https://earthdata.nasa.gov" target="_blank" rel="noopener noreferrer">NASA Black Marble VNP46A4 · Bortle scale</a>',
   });
   lpTileLayer.addTo(ncMap);
 
@@ -2497,7 +2500,7 @@ searchInput.addEventListener('input',function(){
   searchTimer=setTimeout(async()=>{
     try{
       const res=await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=8&addressdetails=1`,
-        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.89 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
+        {headers:{'Accept-Language':currentLang,'User-Agent':'NightCompass/0.90 (nightcompass.net)'},signal:AbortSignal.timeout(6000)});
       const items=await res.json();
       const seen=new Set(spotMatches.map(s=>s.name));
       const geoItems=items.filter(r=>{
@@ -3483,7 +3486,7 @@ function startTabBlink(kp){
 }
 function stopTabBlink(){
   if(kpBlinkTimer){ clearInterval(kpBlinkTimer); kpBlinkTimer=null; }
-  document.title = ORIG_TITLE || 'NightCompass v0.89';
+  document.title = ORIG_TITLE || 'NightCompass v0.90';
   kpAlertActive = false;
 }
 
@@ -4768,7 +4771,7 @@ init();
     <!-- NETWORK -->
     <div class="diag-section-title">🌐 Network / NOAA</div>
     <div class="diag-row" id="diag-network"></div>
-    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.89</div>
+    <div style="margin-top:6px;font-size:9px;color:rgba(255,165,0,.4);">Auto-refreshes every 10s · v0.90</div>
   </div>
 </div>
 </body>
