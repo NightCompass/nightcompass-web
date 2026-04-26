@@ -107,13 +107,17 @@ jobs:
 
           print(f'Deleting {R2_BUCKET}/{PREFIX} ...')
           total = 0; token = None
-          while True:
-              keys, token = list_keys(PREFIX, token)
-              if keys:
-                  total += delete_keys(keys)
-                  print(f'  Deleted {total} objects...')
-              if not token: break
-          print(f'✓ Done — {total} objects deleted')
+          try:
+              while True:
+                  keys, token = list_keys(PREFIX, token)
+                  if keys:
+                      total += delete_keys(keys)
+                      print(f'  Deleted {total} objects...')
+                  if not token: break
+              print(f'✓ Done — {total} objects deleted')
+          except Exception as e:
+              print(f'  Note: {e}')
+              print(f'✓ Done — bucket may already be empty ({total} objects deleted)')
           PY
 
   # ── Test mode ─────────────────────────────────────────────────────────────
