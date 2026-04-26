@@ -362,6 +362,17 @@ jobs:
               return max(0, min(n-1,
                   int((1-math.log(math.tan(lr)+1/math.cos(lr))/math.pi)/2*n)))
 
+          # ── Pre-download only the VIIRS files we need ─────────────────────
+          # Compute h/v range from our lon window (+1 padding for tile edges)
+          # This prevents lazy loading from downloading the entire globe.
+          h_min = max(0,  int((LON_MIN + 180) / 10) - 1)
+          h_max = min(35, int((LON_MAX + 180) / 10) + 1)
+          print(f'Pre-downloading VIIRS h{h_min:02d}-h{h_max:02d} × v00-v17...')
+          for v in range(18):
+              for h in range(h_min, h_max + 1):
+                  load_viirs(h, v)  # populates cache; skips if already loaded
+          print(f'Pre-download complete — {sum(1 for v in viirs_cache.values() if v is not None)} files loaded')
+
           total_tiles=0; total_bytes=0; skipped=0
 
           for zoom in range(ZOOM_MIN, ZOOM_MAX+1):
@@ -612,6 +623,16 @@ jobs:
           def deg2ty(lat,z):
               lr=math.radians(lat); n=2**z
               return max(0,min(n-1,int((1-math.log(math.tan(lr)+1/math.cos(lr))/math.pi)/2*n)))
+
+          # ── Pre-download only the VIIRS files we need ─────────────────────
+          h_min = max(0,  int((LON_MIN + 180) / 10) - 1)
+          h_max = min(35, int((LON_MAX + 180) / 10) + 1)
+          print(f'Pre-downloading VIIRS h{h_min:02d}-h{h_max:02d} x v00-v17...')
+          for v in range(18):
+              for h in range(h_min, h_max+1):
+                  load_viirs(h, v)
+          loaded = sum(1 for v in viirs_cache.values() if v is not None)
+          print(f'Pre-download complete — {loaded} files loaded')
 
           total=0; skipped=0; total_bytes=0
           for zoom in range(ZOOM_MIN,ZOOM_MAX+1):
