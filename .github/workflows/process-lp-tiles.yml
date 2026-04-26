@@ -316,15 +316,20 @@ jobs:
               row_grid = np.clip(((90 - v_grid*10 - lat_grid) / 10 * 2400
                                   ).astype(np.int32), 0, 2399)
 
-              # Sample radiance for each unique (h,v) combination
+              # Only sample pixels within our lon band — mask everything else
+              # This prevents downloading VIIRS files outside our region
+              # even when low-zoom tiles cover the full globe
+              lon_mask = (lon_grid >= LON_MIN - 0.1) & (lon_grid <= LON_MAX + 0.1)
+
               radiance = np.full((TILE_SIZE, TILE_SIZE), np.nan, dtype=np.float32)
               hv_pairs = np.unique(
-                  np.stack([h_grid.ravel(), v_grid.ravel()], axis=1), axis=0)
+                  np.stack([h_grid[lon_mask].ravel(), v_grid[lon_mask].ravel()], axis=1),
+                  axis=0)
 
               for h, v in hv_pairs:
                   rad = load_viirs(int(h), int(v))
                   if rad is None: continue
-                  mask = (h_grid == h) & (v_grid == v)
+                  mask = lon_mask & (h_grid == h) & (v_grid == v)
                   radiance[mask] = rad[row_grid[mask], col_grid[mask]]
 
               # Apply Bortle ramp and encode
@@ -587,11 +592,12 @@ jobs:
               v_g   = np.clip(((90-lat_g)/10).astype(np.int32),0,17)
               col_g = np.clip(((lon_g-(h_g*10-180))/10*2400).astype(np.int32),0,2399)
               row_g = np.clip(((90-v_g*10-lat_g)/10*2400).astype(np.int32),0,2399)
+              lon_mask = (lon_g >= LON_MIN - 0.1) & (lon_g <= LON_MAX + 0.1)
               rad   = np.full((TILE_SIZE,TILE_SIZE),np.nan,dtype=np.float32)
-              for h,v in np.unique(np.stack([h_g.ravel(),v_g.ravel()],axis=1),axis=0):
+              for h,v in np.unique(np.stack([h_g[lon_mask].ravel(),v_g[lon_mask].ravel()],axis=1),axis=0):
                   src = load_viirs(int(h),int(v))
                   if src is None: continue
-                  mask = (h_g==h)&(v_g==v)
+                  mask = lon_mask&(h_g==h)&(v_g==v)
                   rad[mask] = src[row_g[mask],col_g[mask]]
               rgba = apply_ramp(rad)
               if rgba[:,:,3].max()==0: return None
